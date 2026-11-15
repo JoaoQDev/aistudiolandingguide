@@ -115,6 +115,11 @@ const DIMPLE = makeLut((t) => {
   const r = (t - 1.02) / 0.2;
   return -(1 - smooth(0.45, 1.0, t)) + 0.08 * Math.exp(-r * r);
 }, 1.6);
+/** Steeper-walled pit with a raised rim (footprint-like clusters). */
+const PIT = makeLut((t) => {
+  const r = (t - 1.0) / 0.16;
+  return -(1 - smooth(0.6, 1.0, t)) + 0.22 * Math.exp(-r * r);
+}, 1.6);
 
 interface Stamp {
   cx: number;
@@ -310,8 +315,9 @@ export function generateRegolithTexture(size: number, seed: number): RegolithTex
     });
   }
 
-  // 4. Footprint-like elongated dimples.
-  const nDimples = 170;
+  // 4. Footprint-like elongated dimples: loose singles plus clusters of 3–7 pits with crisp,
+  //    slightly raised rims (they read as small dark crescents with a lit far edge).
+  const nDimples = 120;
   for (let c = 0; c < nDimples; c++) {
     const rf = 0.008 + 0.024 * rnd() ** 1.5;
     const A = rf * size;
@@ -330,6 +336,34 @@ export function generateRegolithTexture(size: number, seed: number): RegolithTex
       ampB: 0,
       albedo: -0.01,
     });
+  }
+  const nClusters = 70;
+  for (let c = 0; c < nClusters; c++) {
+    const cx0 = rnd() * size;
+    const cy0 = rnd() * size;
+    const dir = rnd() * Math.PI * 2;
+    const count = 3 + Math.floor(rnd() * 5);
+    const rf = 0.009 + 0.012 * rnd();
+    const step = rf * size * (1.9 + 1.2 * rnd());
+    for (let k = 0; k < count; k++) {
+      const side = (k & 1 ? 1 : -1) * rf * size * (0.6 + 0.5 * rnd());
+      const along = k * step + (rnd() - 0.5) * step * 0.5;
+      const A = rf * size * (0.8 + 0.4 * rnd());
+      const ratio = 0.42 + 0.25 * rnd();
+      stamp(h, alb, size, {
+        cx: cx0 + Math.cos(dir) * along - Math.sin(dir) * side,
+        cy: cy0 + Math.sin(dir) * along + Math.cos(dir) * side,
+        a: A,
+        ratio,
+        angle: dir + (rnd() - 0.5) * 0.6,
+        lutA: PIT,
+        lutB: null,
+        tMax: 1.6,
+        ampA: A * ratio * (0.3 + 0.15 * rnd()),
+        ampB: 0,
+        albedo: -0.015,
+      });
+    }
   }
 
   // 5. Albedo mottling (low frequency + fine speckle).

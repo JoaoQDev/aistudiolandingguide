@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createHeightField } from './terrainHeight';
+import { BASE_PADS, createHeightField } from './terrainHeight';
 import { generateRegolithTexture } from './terrainTexture';
 
 /** Height of the mesh triangle under (x, z) computed directly from the built mesh data. */
@@ -49,33 +49,75 @@ describe('lunar ground height field', () => {
     expect(Number.isFinite(a.heightAt(1e7, -1e7))).toBe(true);
   });
 
-  it('keeps the base area nearly flat', () => {
-    const f = createHeightField({ seed: 7, lowPower: false });
-    expect(Math.abs(f.heightAt(0, 0))).toBeLessThan(0.05);
-    let min = Infinity;
-    let max = -Infinity;
-    let maxSlope = 0;
-    for (let x = -100; x <= 100; x += 2.5) {
-      for (let z = -100; z <= 100; z += 2.5) {
-        const h = f.heightAt(x, z);
-        min = Math.min(min, h);
-        max = Math.max(max, h);
-        const s = Math.hypot(f.heightAt(x + 1, z) - h, f.heightAt(x, z + 1) - h);
-        maxSlope = Math.max(maxSlope, s);
+  const D = Math.PI / 180;
+  const at = (azDeg: number, r: number): [number, number] => [Math.sin(azDeg * D) * r, -Math.cos(azDeg * D) * r];
+  const slopeAt = (f: ReturnType<typeof createHeightField>, x: number, z: number) =>
+    Math.hypot(f.heightAt(x + 0.5, z) - f.heightAt(x - 0.5, z), f.heightAt(x, z + 0.5) - f.heightAt(x, z - 0.5));
+
+  it('keeps the base floor and the prop clusters nearly flat', () => {
+    for (const seed of [7, 1234]) {
+      const f = createHeightField({ seed, lowPower: false });
+      expect(Math.abs(f.heightAt(0, 0))).toBeLessThan(0.05);
+      // Calm floor around the spawn and the prop clusters (spawn, ship, sunward group, NE row).
+      const discs: Array<[number, number, number]> = [
+        [0, 0, 40],
+        [28, -19, 20],
+        [-27, 11, 12],
+        [72, -72, 28],
+      ];
+      for (const [cx, cz, R] of discs) {
+        let min = Infinity;
+        let max = -Infinity;
+        let maxSlope = 0;
+        for (let x = cx - R; x <= cx + R; x += 2) {
+          for (let z = cz - R; z <= cz + R; z += 2) {
+            if ((x - cx) ** 2 + (z - cz) ** 2 > R * R) continue;
+            const h = f.heightAt(x, z);
+            min = Math.min(min, h);
+            max = Math.max(max, h);
+            maxSlope = Math.max(maxSlope, slopeAt(f, x, z));
+          }
+        }
+        expect(max - min).toBeLessThan(0.8);
+        expect(maxSlope).toBeLessThan(Math.tan(3 * D));
+      }
+      // Keep-flat pads (distant greenhouse) are level.
+      for (const p of BASE_PADS) {
+        const h0 = f.heightAt(p.x, p.z);
+        for (let a = 0; a < 360; a += 30) {
+          const [dx, dz] = at(a, p.r * 0.9);
+          expect(Math.abs(f.heightAt(p.x + dx, p.z + dz) - h0)).toBeLessThan(0.05);
+        }
       }
     }
-    expect(max - min).toBeLessThan(1.2);
-    expect(maxSlope).toBeLessThan(0.09); // < ~5°
   });
 
-  it('raises distant hills above the plain', () => {
-    const f = createHeightField({ seed: 3, lowPower: false });
-    let far = -Infinity;
-    for (let a = 0; a < 360; a += 3) {
-      const r = 2400;
-      far = Math.max(far, f.heightAt(Math.sin((a * Math.PI) / 180) * r, -Math.cos((a * Math.PI) / 180) * r));
+  it('rises gently (3–6°) to a near crest on the Sun side and toward the E', () => {
+    const f = createHeightField({ seed: 7, lowPower: false });
+    for (const az of [180, 210, 270, 75]) {
+      const [x0, z0] = at(az, 40);
+      const [x1, z1] = at(az, az === 75 ? 190 : az === 270 ? 100 : 150);
+      const rise = f.heightAt(x1, z1) - f.heightAt(x0, z0);
+      const run = Math.hypot(x1 - x0, z1 - z0);
+      expect(rise).toBeGreaterThan(3);
+      expect(Math.atan(rise / run) / D).toBeLessThan(6);
     }
-    expect(far).toBeGreaterThan(15);
+  });
+
+  it('turns steep, self-shadowed far ridge faces toward the base right of the Sun', () => {
+    const f = createHeightField({ seed: 7, lowPower: false });
+    let found = 0;
+    for (let az = 275; az <= 305; az += 5) {
+      let steepest = 0;
+      for (let r = 700; r < 1500; r += 8) {
+        const [xa, za] = at(az, r);
+        const [xb, zb] = at(az, r + 8);
+        steepest = Math.max(steepest, (f.heightAt(xb, zb) - f.heightAt(xa, za)) / 8);
+      }
+      // Rising outward faster than the 10° illustrative Sun elevation => face in shadow.
+      if (steepest > Math.tan(15 * D)) found++;
+    }
+    expect(found).toBeGreaterThanOrEqual(5);
   });
 
   it('heightAt matches the rendered triangles (low-power mesh)', () => {

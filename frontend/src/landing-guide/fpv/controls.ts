@@ -15,8 +15,8 @@ import type { CircleCollider, ControllerModule, ControllerOptions, FrameContext 
  * - `frozen` (debug pose / screenshots): exact pose, no listeners, no motion.
  */
 
-export const WALK_SPEED_MPS = 4.5;
-export const RUN_SPEED_MPS = 9;
+export const WALK_SPEED_MPS = 3.7;
+export const RUN_SPEED_MPS = 5.5;
 /** Added to every collider radius so the near plane never clips into a prop. */
 export const PLAYER_RADIUS_M = 0.35;
 /** Width of the ring inside WALK_RADIUS_M where outward motion fades out. */
@@ -28,7 +28,7 @@ const MOUSE_SENS_DEG_PER_PX = 0.085;
 const DRAG_SENS_DEG_PER_PX = 0.16;
 /** Pointer Lock occasionally reports huge spikes (browser bugs); ignore anything beyond this. */
 const MAX_MOUSE_DELTA_PX = 220;
-const KEY_TURN_RATE_DEG_S = 95;
+const KEY_TURN_RATE_DEG_S = 120;
 const KEY_TURN_RESPONSE = 9;
 const ACCEL_RESPONSE = 6.5;
 const BRAKE_RESPONSE = 8.5;

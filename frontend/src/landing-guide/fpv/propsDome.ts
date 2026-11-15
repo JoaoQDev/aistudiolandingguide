@@ -1,11 +1,12 @@
 import * as THREE from 'three';
-import { colorize, makeRng, mergeAll } from './propsGeometry';
+import { colorize, mergeAll } from './propsGeometry';
 
 /**
- * Greenhouse (t21/t30): a clear glass hemisphere with a bright fresnel rim, filled with dark
- * green vegetation, standing on a raised platform (the crate ring around it is placed by
- * props.ts with the shared crate meshes). Local origin: ground centre; the dome base sits at
- * `baseY`.
+ * Greenhouse (t08/t12/t21/t30/t37–t47): a large clear glass hemisphere far beyond the base,
+ * filled with a dark green canopy whose sunlit leaf clusters catch the light, with a thin crisp
+ * bright rim on the sunward glass edge. It is placed a few hundred metres out (props.ts) so that,
+ * as in the reference walk, it keeps the same bearing just left of the Sun from everywhere in the
+ * base while nearby props shift. Local origin: ground centre; the glass base sits at `baseY`.
  */
 
 export interface Greenhouse {
@@ -35,126 +36,196 @@ void main() {
   vec3 N = normalize(vN);
   vec3 V = normalize(cameraPosition - vW);
   float ndv = clamp(abs(dot(N, V)), 0.0, 1.0);
-  float f = pow(1.0 - ndv, 1.7);
-  float rim = smoothstep(0.62, 0.97, 1.0 - ndv);
+  float edge = 1.0 - ndv;
+  float f = pow(edge, 2.2);
+  // thin crisp rim, only on the half of the silhouette that faces the Sun
+  float rim = smoothstep(0.8, 0.97, edge);
   vec3 sunH = normalize(vec3(uSun.x, 0.0, uSun.z) + 1e-4);
-  float sunSide = 0.12 + 0.88 * smoothstep(-0.25, 0.75, dot(normalize(vec3(N.x, 0.0, N.z) + 1e-4), sunH));
+  vec3 nH = normalize(vec3(N.x, 0.0, N.z) + 1e-4);
+  // silhouette half toward the Sun (works when looking into the Sun, where the edge normals are
+  // nearly perpendicular to it)
+  float sunSide = smoothstep(-0.12, 0.2, dot(nH, sunH));
   vec3 R = reflect(-V, N);
-  float spec = pow(max(dot(R, uSun), 0.0), 80.0) * 4.0;
-  float sky = 0.04 * (N.y * 0.5 + 0.5);
-  vec3 col = uTint * (0.06 + sky) + vec3(1.0) * (f * 0.5 + rim * 2.6) * sunSide + vec3(spec);
-  float a = clamp(0.04 + f * 0.25 + rim * 0.85 * sunSide + spec * 0.5, 0.0, 0.95);
+  float spec = pow(max(dot(R, uSun), 0.0), 120.0) * 3.0;
+  vec3 col = uTint * 0.03 + vec3(1.0) * (f * 0.08 * (0.3 + sunSide) + rim * 4.0 * sunSide) + vec3(spec);
+  float a = clamp(0.02 + f * 0.08 + rim * 0.97 * sunSide + spec * 0.4, 0.0, 0.98);
   gl_FragColor = vec4(col, a);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
 `;
 
-export function createGreenhouse(radius: number, baseY: number, lowPower: boolean, seed: number): Greenhouse {
-  const group = new THREE.Group();
-  const disposables: { dispose(): void }[] = [];
+const CANOPY_VERT = /* glsl */ `
+attribute float aLit;
+varying vec3 vN;
+varying vec3 vCol;
+varying float vLit;
+varying vec3 vL;
+void main() {
+  vN = normalize(mat3(modelMatrix) * normal);
+  vCol = color;
+  vLit = aLit;
+  vL = position;
+  gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+}
+`;
 
-  // platform + soil
+const CANOPY_FRAG = /* glsl */ `
+uniform vec3 uSun;
+uniform vec3 uLeaf;
+varying vec3 vN;
+varying vec3 vCol;
+varying float vLit;
+varying vec3 vL;
+float h3(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float vn(vec3 x) {
+  vec3 i = floor(x);
+  vec3 f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(h3(i), h3(i + vec3(1.0, 0.0, 0.0)), f.x), mix(h3(i + vec3(0.0, 1.0, 0.0)), h3(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+    mix(mix(h3(i + vec3(0.0, 0.0, 1.0)), h3(i + vec3(1.0, 0.0, 1.0)), f.x), mix(h3(i + vec3(0.0, 1.0, 1.0)), h3(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+    f.z);
+}
+void main() {
+  vec3 N = normalize(vN);
+  // leaf clumps (a few metres) made of small lit leaf groups (about a metre), in local metres
+  float clump = vn(vL * 0.28) * 0.65 + vn(vL * 0.61 + 3.7) * 0.35;
+  float spots = vn(vL * 1.35 + 11.0);
+  float leaves = smoothstep(0.44, 0.62, clump) * smoothstep(0.5, 0.86, spots) * vLit;
+  vec3 sunH = normalize(vec3(uSun.x, 0.35, uSun.z));
+  float d = dot(N, sunH);
+  // light scattered through the glass and leaves: wrapped, never fully black
+  float wrap = 0.45 + 0.55 * clamp(d * 0.5 + 0.5, 0.0, 1.0);
+  float sunSide = 0.3 + 0.9 * smoothstep(-0.4, 0.8, d);
+  vec3 col = vCol * wrap * (0.7 + 0.6 * spots) + uLeaf * leaves * sunSide * (0.6 + 0.6 * vLit);
+  gl_FragColor = vec4(col, 1.0);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}
+`;
+
+// small deterministic 3D value noise for the canopy
+function hash3(x: number, y: number, z: number, s: number): number {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(z, 1442695041) + Math.imul(s, 2246822519)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x: number, y: number, z: number, s: number): number {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const zi = Math.floor(z);
+  const xf = x - xi;
+  const yf = y - yi;
+  const zf = z - zi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const w = zf * zf * (3 - 2 * zf);
+  let r = 0;
+  for (let k = 0; k < 8; k++) {
+    const dx = k & 1;
+    const dy = (k >> 1) & 1;
+    const dz = (k >> 2) & 1;
+    const wt = (dx ? u : 1 - u) * (dy ? v : 1 - v) * (dz ? w : 1 - w);
+    r += wt * hash3(xi + dx, yi + dy, zi + dz, s);
+  }
+  return r;
+}
+function fbm(x: number, y: number, z: number, s: number, oct: number): number {
+  let a = 0.5;
+  let f = 1;
+  let r = 0;
+  let n = 0;
+  for (let i = 0; i < oct; i++) {
+    r += a * vnoise(x * f, y * f, z * f, s + i * 17);
+    n += a;
+    a *= 0.5;
+    f *= 2.03;
+  }
+  return r / n;
+}
+
+/**
+ * @param sunAzDeg azimuth the canopy leaves a dark gap toward (the reference shows black glass
+ * between the canopy and the sunward rim).
+ */
+export function createGreenhouse(radius: number, baseY: number, lowPower: boolean, seed: number, sunAzDeg = 252): Greenhouse {
+  const group = new THREE.Group();
+  group.name = 'greenhouse';
+  const disposables: { dispose(): void }[] = [];
+  const s = seed >>> 0;
+
+  // dark platform band (reads as the crate ring / plinth at this distance) + light ring
   const platformGeo = mergeAll(
     [
-      colorize(new THREE.CylinderGeometry(radius + 0.05, radius + 0.2, baseY + 1.0, 40, 1).translate(0, (baseY - 1.0) / 2, 0), 0x3b3c40),
-      colorize(new THREE.CylinderGeometry(radius - 0.05, radius - 0.05, 0.12, 40, 1).translate(0, baseY + 0.06, 0), 0x2a2618),
-      colorize(new THREE.TorusGeometry(radius + 0.02, 0.09, 6, 64).rotateX(Math.PI / 2).translate(0, baseY + 0.08, 0), 0xc4c4c8),
+      colorize(new THREE.CylinderGeometry(radius + 0.4, radius + 1.2, baseY + 3, 64, 1).translate(0, (baseY - 3) / 2, 0), 0x2e2e33),
+      colorize(new THREE.CylinderGeometry(radius - 0.2, radius - 0.2, 0.3, 64, 1).translate(0, baseY + 0.15, 0), 0x22201a),
+      colorize(new THREE.TorusGeometry(radius + 0.1, 0.22, 6, 96).rotateX(Math.PI / 2).translate(0, baseY + 0.1, 0), 0xb8b8bc),
     ],
     { uv: false, color: true },
   );
-  const platformMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.1 });
+  const platformMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.05 });
   const platform = new THREE.Mesh(platformGeo, platformMat);
-  platform.castShadow = !lowPower;
-  platform.receiveShadow = !lowPower;
   group.add(platform);
   disposables.push(platformGeo, platformMat);
 
-  // vegetation: many small dark flat-shaded leaf clusters filling the dome, plus tiny bright
-  // "sunlit leaf tip" specks that give the sparkly canopy seen through the glass (t12, t21)
-  const rand = makeRng(seed ^ 0x51ed);
-  const area = Math.min(4, (radius / 4.6) ** 2);
-  const count = Math.round((lowPower ? 260 : 900) * area);
-  const leafGeo = new THREE.IcosahedronGeometry(1, 0);
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x030602, roughness: 0.85, metalness: 0, flatShading: true });
-  const leaves = new THREE.InstancedMesh(leafGeo, leafMat, count);
-  const greens = [0x0a1408, 0x0e1a0b, 0x13220e, 0x182a12, 0x1e3416, 0x2a4019, 0x44521f, 0x5e6226];
-  const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const s = new THREE.Vector3();
-  const p = new THREE.Vector3();
-  const e = new THREE.Euler();
+  // canopy: lumpy displaced hemisphere inside the glass, dark green-brown with lit leaf clusters
+  const segW = lowPower ? 72 : 144;
+  const segH = lowPower ? 24 : 48;
+  const canopyGeo = new THREE.SphereGeometry(1, segW, segH, 0, Math.PI * 2, 0, Math.PI / 2);
+  const pos = canopyGeo.getAttribute('position') as THREE.BufferAttribute;
+  const colors = new Float32Array(pos.count * 3);
+  const lit = new Float32Array(pos.count);
+  const dark = new THREE.Color(0x0a0f06);
+  const mid = new THREE.Color(0x1a2211);
+  const brown = new THREE.Color(0x231a0d);
   const c = new THREE.Color();
-  /** Random point inside the dome, biased toward the canopy (upper part / glass). */
-  const canopyPoint = (out: THREE.Vector3, shell: number) => {
-    const u = rand() * 2 - 1;
-    const th = rand() * Math.PI * 2;
-    const elev = Math.asin(Math.pow(Math.abs(u), 0.7));
-    const r = radius * (shell + (1 - shell) * Math.pow(rand(), 0.5)) * 0.9;
-    out.set(Math.cos(th) * Math.cos(elev) * r, baseY + Math.sin(elev) * r, Math.sin(th) * Math.cos(elev) * r);
-    return out;
-  };
-  for (let i = 0; i < count; i++) {
-    canopyPoint(p, i < count * 0.6 ? 0.55 : 0.1);
-    const size = (0.25 + rand() * 0.55) * Math.max(0.8, radius / 5.5);
-    p.y = Math.max(p.y, baseY + size * 0.5);
-    e.set(rand() * 3, rand() * 3, rand() * 3);
-    q.setFromEuler(e);
-    s.set(size * (0.8 + rand() * 0.5), size * (0.6 + rand() * 0.5), size * (0.8 + rand() * 0.5));
-    m.compose(p, q, s);
-    leaves.setMatrixAt(i, m);
-    const high = (p.y - baseY) / radius;
-    c.setHex(greens[Math.min(greens.length - 1, Math.floor(rand() * (high > 0.5 ? 8 : 5)))]);
-    leaves.setColorAt(i, c);
+  const p = new THREE.Vector3();
+  const sunX = Math.sin((sunAzDeg * Math.PI) / 180);
+  const sunZ = -Math.cos((sunAzDeg * Math.PI) / 180);
+  for (let i = 0; i < pos.count; i++) {
+    p.fromBufferAttribute(pos, i);
+    const big = fbm(p.x * 2.0 + 3.1, p.y * 2.0, p.z * 2.0 - 1.7, s, 3);
+    const lump = fbm(p.x * 6 + 11, p.y * 6, p.z * 6, s + 5, 3);
+    // irregular canopy, lower and pulled back on the sunward side
+    const toSun = Math.max(0, (p.x * sunX + p.z * sunZ) / Math.max(1e-3, Math.hypot(p.x, p.z))) * Math.sqrt(Math.max(0, 1 - p.y * p.y));
+    const r = radius * (0.74 + 0.16 * big + 0.06 * lump - 0.16 * toSun * (0.4 + p.y));
+    const y = Math.max(0.02, p.y);
+    p.set(p.x * r - sunX * radius * 0.05, baseY + y * r * 0.95, p.z * r - sunZ * radius * 0.05);
+    pos.setXYZ(i, p.x, p.y, p.z);
+    // tones: dark green, a few reddish-brown patches, lit yellow-green leaf clumps (metres)
+    const tone = fbm(p.x * 0.06 + 2, p.y * 0.06, p.z * 0.06, s + 9, 2);
+    const patch = fbm(p.x * 0.11 - 4, p.y * 0.11, p.z * 0.11, s + 29, 2);
+    c.copy(dark).lerp(mid, THREE.MathUtils.smoothstep(tone, 0.35, 0.7)).lerp(brown, 0.85 * THREE.MathUtils.smoothstep(patch, 0.56, 0.7));
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
+    // regional mask for the lit leaf clumps (fewer in the brown patches and low on the shaded side)
+    lit[i] = (1 - 0.75 * THREE.MathUtils.smoothstep(patch, 0.56, 0.7)) * (0.55 + 0.45 * Math.min(1, (p.y - baseY) / (0.5 * radius)));
   }
-  leaves.instanceMatrix.needsUpdate = true;
-  if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
-  leaves.computeBoundingSphere();
-  leaves.castShadow = false;
-  leaves.receiveShadow = !lowPower;
-  group.add(leaves);
-  disposables.push(leafGeo, leafMat);
-
-  const speckCount = Math.round((lowPower ? 400 : 1500) * area);
-  const speckGeo = new THREE.OctahedronGeometry(1, 0);
-  const speckMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  const specks = new THREE.InstancedMesh(speckGeo, speckMat, speckCount);
-  const speckColors = [0xc2bd78, 0xdedaa0, 0xa3a866, 0xf0ecc8, 0x8a9450];
-  for (let i = 0; i < speckCount; i++) {
-    const th = rand() * Math.PI * 2;
-    const elev = Math.asin(Math.pow(rand(), 0.55));
-    const r = radius * (0.84 + 0.1 * rand());
-    p.set(Math.cos(th) * Math.cos(elev) * r, baseY + Math.sin(elev) * r, Math.sin(th) * Math.cos(elev) * r);
-    const size = 0.035 + rand() * 0.06;
-    e.set(rand() * 3, rand() * 3, rand() * 3);
-    q.setFromEuler(e);
-    s.set(size * (1 + rand()), size, size * (1 + rand()));
-    m.compose(p, q, s);
-    specks.setMatrixAt(i, m);
-    c.setHex(speckColors[Math.floor(rand() * speckColors.length)]).multiplyScalar(0.55 + 0.45 * rand());
-    specks.setColorAt(i, c);
-  }
-  specks.instanceMatrix.needsUpdate = true;
-  if (specks.instanceColor) specks.instanceColor.needsUpdate = true;
-  specks.computeBoundingSphere();
-  group.add(specks);
-  disposables.push(speckGeo, speckMat);
-  // a few trunks
-  const trunkGeo = mergeAll(
-    Array.from({ length: lowPower ? 6 : 14 }, () => {
-      const rr = radius * 0.6 * Math.sqrt(rand());
-      const th = rand() * Math.PI * 2;
-      const h = 0.8 + rand() * (radius * 0.5);
-      return colorize(new THREE.CylinderGeometry(0.06, 0.12, h, 6).translate(Math.cos(th) * rr, baseY + h / 2, Math.sin(th) * rr), 0x3a2f20);
-    }),
-    { uv: false, color: true },
-  );
-  const trunks = new THREE.Mesh(trunkGeo, platformMat);
-  group.add(trunks);
-  disposables.push(trunkGeo);
+  canopyGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  canopyGeo.setAttribute('aLit', new THREE.BufferAttribute(lit, 1));
+  canopyGeo.computeVertexNormals();
+  const canopyMat = new THREE.ShaderMaterial({
+    vertexShader: CANOPY_VERT,
+    fragmentShader: CANOPY_FRAG,
+    vertexColors: true,
+    uniforms: {
+      uSun: { value: new THREE.Vector3(0, 0.2, -1).normalize() },
+      uLeaf: { value: new THREE.Color(0xd4d28e) },
+    },
+  });
+  const canopy = new THREE.Mesh(canopyGeo, canopyMat);
+  canopy.name = 'greenhouse-canopy';
+  group.add(canopy);
+  disposables.push(canopyGeo, canopyMat);
 
   // glass shell
-  const glassGeo = new THREE.SphereGeometry(radius, lowPower ? 32 : 56, lowPower ? 12 : 20, 0, Math.PI * 2, 0, Math.PI / 2);
+  const glassGeo = new THREE.SphereGeometry(radius, lowPower ? 48 : 96, lowPower ? 16 : 32, 0, Math.PI * 2, 0, Math.PI / 2);
   glassGeo.translate(0, baseY, 0);
   const glass = new THREE.ShaderMaterial({
     vertexShader: GLASS_VERT,
@@ -177,11 +248,10 @@ export function createGreenhouse(radius: number, baseY: number, lowPower: boolea
     glass,
     setSunDirection(dir) {
       (glass.uniforms.uSun.value as THREE.Vector3).copy(dir).normalize();
+      (canopyMat.uniforms.uSun.value as THREE.Vector3).copy(dir).normalize();
     },
     dispose() {
       for (const d of disposables) d.dispose();
-      leaves.dispose();
-      specks.dispose();
     },
   };
 }

@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { createMoonbase } from './props';
+import { bearing, GREENHOUSE_CENTER, REFERENCE_POSES, SUNWARD_CRATES } from './propsLayout';
+import { SHIP_HEIGHT, SHIP_LENGTH } from './propsShip';
+import { TANK_HEIGHT } from './propsTanks';
 import { WALK_RADIUS_M } from './types';
 
 const rolling = (x: number, z: number) => Math.sin(x * 0.05) * 0.9 + Math.cos(z * 0.043) * 0.7 + Math.sin((x + z) * 0.11) * 0.25;
@@ -74,5 +77,52 @@ describe('createMoonbase', () => {
     expect(() => base.update?.({ dt: 0.016, elapsed: 1.2, camera })).not.toThrow();
     base.dispose();
     expect(base.object.parent).toBeNull();
+  });
+
+  it('publishes reachable reference poses for all 14 frames, clear of every collider', () => {
+    expect(Object.keys(REFERENCE_POSES).length).toBe(14);
+    for (const heightAt of [rolling, () => 0]) {
+      const base = createMoonbase({ seed: 5, lowPower: false, heightAt });
+      for (const [name, pose] of Object.entries(REFERENCE_POSES)) {
+        expect(Math.hypot(pose.x, pose.z), name).toBeLessThan(WALK_RADIUS_M);
+        for (const c of base.colliders) expect(Math.hypot(pose.x - c.x, pose.z - c.z), name).toBeGreaterThan(c.radius + 0.3);
+      }
+      base.dispose();
+    }
+  });
+
+  it('keeps the measured scale relations and the far greenhouse bearing', () => {
+    // reference: ship ≈ 4× and ≈ 14× the 1.8 m tank in height / length (eye 1.7 m)
+    expect(SHIP_HEIGHT / TANK_HEIGHT).toBeGreaterThan(3.5);
+    expect(SHIP_HEIGHT / TANK_HEIGHT).toBeLessThan(4.6);
+    expect(SHIP_LENGTH / TANK_HEIGHT).toBeGreaterThan(11);
+    expect(SHIP_LENGTH / TANK_HEIGHT).toBeLessThan(16);
+    // the dome stays ≈ 13° left of the illustrative Sun (azimuth 252°) from the whole base area
+    for (const p of [{ x: 0, z: 0 }, SUNWARD_CRATES, REFERENCE_POSES.t21, REFERENCE_POSES.t47]) {
+      const b = bearing(p.x, p.z, GREENHOUSE_CENTER.x, GREENHOUSE_CENTER.z);
+      expect(b).toBeGreaterThan(234);
+      expect(b).toBeLessThan(242);
+    }
+  });
+
+  it('adds one draped contact-darkening mesh with per-vertex alpha', () => {
+    const base = createMoonbase({ seed: 9, lowPower: false, heightAt: rolling });
+    const mesh = base.object.getObjectByName('contact-shadows') as THREE.Mesh;
+    expect(mesh).toBeTruthy();
+    const col = mesh.geometry.getAttribute('color');
+    const pos = mesh.geometry.getAttribute('position');
+    expect(col.itemSize).toBe(4);
+    let maxA = 0;
+    for (let i = 0; i < col.count; i++) {
+      maxA = Math.max(maxA, col.getW(i));
+      // draped just above the terrain
+      expect(pos.getY(i) - rolling(pos.getX(i), pos.getZ(i))).toBeCloseTo(0.025, 3);
+    }
+    expect(maxA).toBeGreaterThan(0.4);
+    expect(maxA).toBeLessThanOrEqual(1);
+    const mat = mesh.material as THREE.MeshBasicMaterial;
+    expect(mat.depthWrite).toBe(false);
+    expect(mat.transparent).toBe(true);
+    base.dispose();
   });
 });

@@ -8,24 +8,30 @@ import { EYE_HEIGHT_M, type FrameContext, type SkyModule, type SkyOptions } from
  * Sky & lighting for the first-person lunar walk.
  *
  * Lighting convention (other modules may rely on it):
- * - Renderer: Khronos PBR Neutral tone mapping, exposure 1. Below ~0.76 linear the output equals the
- *   input minus a small toe offset, so material colours land on screen almost as authored.
+ * - Renderer: Khronos PBR Neutral tone mapping at exposure SKY_EXPOSURE (0.88). Between ~0.09 and
+ *   ~0.9 linear the output is `0.88 · input − 0.04`; below that the toe goes quadratic
+ *   (≈ 6.25 · x²), which is what makes shadowed faces fall steeply toward black.
  * - Sun: DirectionalLight with intensity SUN_INTENSITY = π, i.e. a white Lambertian surface facing
- *   the Sun renders at linear 1.0 (three.js diffuse = albedo · intensity · cosθ / π).
- *   A lit prop with albedo ≈ #c6c5d1 facing the Sun at ~45–60° shows ≈ #b9b8c4.
+ *   the Sun receives linear 1.0 before exposure (three.js diffuse = albedo · intensity · cosθ / π).
+ *   Screen value of a sunlit matte face ≈ sRGB( 0.88 · albedoLinear · cosθ − 0.04 ).
  * - Fill: PMREM environment (black sky, sunlit regolith below the horizon) at ENV_INTENSITY plus a
- *   weak hemisphere light; together they keep shadowed prop faces dark but not black.
+ *   weak hemisphere light. Calibrated so faces turned away from the Sun land at sRGB ≈ 15–35
+ *   (dark but not black), like the reference frames; there is no local bounce between props.
  * - Sky: pure black, no stars. Sun = constant-angular-size disc + halo sprite. Earth = small sphere
  *   at its dataset direction with the true ~1.9° apparent size.
  * The lighting is illustrative (sun elevation is fixed upstream); nothing here is a measurement.
  */
 
 export const SKY_TONE_MAPPING = THREE.NeutralToneMapping;
-export const SKY_EXPOSURE = 1.0;
+/** Tone-mapping exposure. 0.88 brings sunlit regolith and prop flanks to the reference levels. */
+export const SKY_EXPOSURE = 0.88;
 /** Sun DirectionalLight intensity: π ⇒ unit irradiance on a surface facing the Sun. */
 export const SUN_INTENSITY = Math.PI;
-/** Strength of the regolith-bounce environment (diffuse + specular) on PBR materials. */
-export const ENV_INTENSITY = 0.55;
+/**
+ * Strength of the regolith-bounce environment (diffuse + specular) on PBR materials. The ground's
+ * own shader barely sees it (its normals face the black sky); it mostly fills shadowed prop faces.
+ */
+export const ENV_INTENSITY = 0.4;
 
 // Shadow volume (metres). The box follows the camera, is pushed forward along the view, and is
 // snapped to shadow-map texels so shadows do not swim. Light-space width is SHADOW_HALF_WIDTH
@@ -132,7 +138,7 @@ export function createLunarSky(opts: SkyOptions): SkyModule {
     hemi.groundColor.setRGB(0.03, 0.03, 0.03);
   } else {
     // No environment: carry the regolith bounce in the hemisphere light instead.
-    hemi.groundColor.setRGB(0.58, 0.56, 0.56);
+    hemi.groundColor.setRGB(0.49, 0.475, 0.475);
   }
   group.add(hemi);
 

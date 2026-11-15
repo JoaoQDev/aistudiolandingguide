@@ -2,11 +2,14 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import {
   computeShadowBounds,
+  configureRenderer,
   createLunarSky,
+  ENV_INTENSITY,
   lightBasis,
   SHADOW_HALF_DEPTH,
   SHADOW_HALF_WIDTH,
   SHADOW_MAP_SIZE,
+  SKY_EXPOSURE,
   snapToShadowTexels,
   SUN_INTENSITY,
 } from './sky';
@@ -26,21 +29,46 @@ describe('sun sprite profile', () => {
   it('has a small saturated core and a halo that fades to black', () => {
     expect(sunProfile(0)).toBe(1);
     expect(sunProfile(4)).toBeGreaterThan(0.8);
-    // Halo right outside the ~10 px core sits around 90/255 like the reference frames.
+    // Halo right outside the ~10 px core sits around 95/255 like the reference frames.
     expect(sunProfile(6.5)).toBeGreaterThan(0.3);
     expect(sunProfile(6.5)).toBeLessThan(0.42);
     expect(sunProfile(30)).toBeGreaterThan(0.08);
     expect(sunProfile(30)).toBeLessThan(0.14);
-    expect(sunProfile(75)).toBeLessThan(0.002);
-    expect(sunProfile(SUN_QUAD_RADIUS_PX)).toBeLessThan(0.002);
+    // Long, faint tail (reference: still ~5/255 at 60 px), gone before the quad edge.
+    expect(sunProfile(60)).toBeGreaterThan(0.01);
+    expect(sunProfile(60)).toBeLessThan(0.035);
+    expect(sunProfile(100)).toBeLessThan(0.002);
   });
 
-  it('decreases monotonically with radius', () => {
-    let prev = Infinity;
-    for (let r = 0; r <= SUN_QUAD_RADIUS_PX; r += 0.5) {
-      const v = sunProfile(r);
-      expect(v).toBeLessThanOrEqual(prev + 1e-9);
-      prev = v;
+  it('matches the measured reference halo along screen directions', () => {
+    // Median display values (×255) measured on the reference frames t08/t12/t21/t30.
+    const ref: Record<string, [number, number][]> = {
+      right: [[25, 46], [40, 26], [60, 10]],
+      left: [[25, 33], [40, 16], [60, 3]],
+      up: [[25, 38], [40, 16], [60, 5]],
+      down: [[25, 48], [40, 26], [60, 12]],
+    };
+    const dirs: Record<string, [number, number]> = { right: [1, 0], left: [-1, 0], up: [0, 1], down: [0, -1] };
+    for (const [name, samples] of Object.entries(ref)) {
+      const [dx, dy] = dirs[name];
+      for (const [r, v] of samples) expect(Math.abs(sunProfile(r, dx, dy) * 255 - v)).toBeLessThan(5);
+    }
+    // The tail is longer toward the lower right, as in the reference.
+    expect(sunProfile(40, 1, 0)).toBeGreaterThan(sunProfile(40, -1, 0) * 1.5);
+    expect(sunProfile(40, 0, -1)).toBeGreaterThan(sunProfile(40, 0, 1) * 1.3);
+  });
+
+  it('decreases monotonically with radius and fits inside the quad in every direction', () => {
+    for (let a = 0; a < 360; a += 15) {
+      const dx = Math.cos((a * Math.PI) / 180);
+      const dy = Math.sin((a * Math.PI) / 180);
+      let prev = Infinity;
+      for (let r = 0; r <= SUN_QUAD_RADIUS_PX; r += 0.5) {
+        const v = sunProfile(r, dx, dy);
+        expect(v).toBeLessThanOrEqual(prev + 1e-9);
+        prev = v;
+      }
+      expect(sunProfile(SUN_QUAD_RADIUS_PX, dx, dy)).toBeLessThan(0.0015);
     }
   });
 });
@@ -79,6 +107,47 @@ describe('camera-following sun shadows', () => {
       // Moves by less than one texel diagonal.
       expect(c.distanceTo(new THREE.Vector3(x, 1.3, z))).toBeLessThan(Math.hypot(tx, ty));
     }
+  });
+});
+
+describe('exposure and fill calibration', () => {
+  // Khronos PBR Neutral below the compression knee (three.js NeutralToneMapping), grey input.
+  const neutral = (x: number) => {
+    const e = x * SKY_EXPOSURE;
+    return e - (e < 0.08 ? e - 6.25 * e * e : 0.04);
+  };
+  const toSrgb255 = (l: number) => 255 * (l <= 0.0031308 ? 12.92 * l : 1.055 * l ** (1 / 2.4) - 0.055);
+
+  it('configures the renderer with the calibrated exposure and a black clear colour', () => {
+    let clear = -1;
+    const renderer = {
+      shadowMap: { enabled: false, type: 0 },
+      setClearColor: (c: number) => {
+        clear = c;
+      },
+    } as unknown as THREE.WebGLRenderer;
+    configureRenderer(renderer, false);
+    expect(renderer.toneMapping).toBe(THREE.NeutralToneMapping);
+    expect(renderer.toneMappingExposure).toBe(SKY_EXPOSURE);
+    expect(renderer.shadowMap.enabled).toBe(true);
+    expect(clear).toBe(0x000000);
+    configureRenderer(renderer, true);
+    expect(renderer.shadowMap.enabled).toBe(false);
+  });
+
+  it('keeps sunlit faces in the linear range and shadowed faces dark but not black', () => {
+    expect(SKY_EXPOSURE).toBeGreaterThan(0.8);
+    expect(SKY_EXPOSURE).toBeLessThan(0.95);
+    // A neutral 0.5-albedo face lit at 60° lands mid-grey, well below the compression knee.
+    const lit = toSrgb255(neutral(0.5 * Math.cos(60 * DEG)));
+    expect(lit).toBeGreaterThan(110);
+    expect(lit).toBeLessThan(140);
+    // Vertical 0.5-albedo face turned away from the Sun: it sees half of the regolith environment
+    // (radiance ≈ 0.33 · ENV_INTENSITY) plus the weak hemisphere fill (≈ 0.02).
+    const groundRadiance = envRadiance(-0.4)[1];
+    const shade = toSrgb255(neutral(0.5 * (0.5 * groundRadiance * ENV_INTENSITY + 0.02)));
+    expect(shade).toBeGreaterThan(8);
+    expect(shade).toBeLessThan(40);
   });
 });
 
