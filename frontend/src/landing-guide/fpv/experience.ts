@@ -1,27 +1,27 @@
 import * as THREE from 'three';
 import { createFirstPersonController } from './controls';
 import { createMoonbase } from './props';
+import {
+  createAdaptiveResolution,
+  pickPixelRatio,
+  resetAdaptiveWindow,
+  setAdaptiveMaxRatio,
+  updateAdaptiveResolution,
+} from './experiencePerf';
 import { configureRenderer, createLunarSky } from './sky';
 import { createLunarGround } from './terrain';
 import type { ExperienceHandle, ExperienceOptions, FrameContext } from './types';
 
 export { parseDebugPose } from './controlsPose';
+export { MAX_PIXEL_RATIO, pickPixelRatio } from './experiencePerf';
 
 const DEG = Math.PI / 180;
 export const FPV_FOV_DEG = 60;
-/** Device pixel ratio cap: high-DPI screens render at most 1.5x for a steady frame rate. */
-export const MAX_PIXEL_RATIO = 1.5;
 
 export function azElToDirection(azDeg: number, elDeg: number, out = new THREE.Vector3()): THREE.Vector3 {
   const az = azDeg * DEG;
   const el = elDeg * DEG;
   return out.set(Math.cos(el) * Math.sin(az), Math.sin(el), -Math.cos(el) * Math.cos(az)).normalize();
-}
-
-export function pickPixelRatio(devicePixelRatio: number, lowPower: boolean): number {
-  if (lowPower) return 1;
-  const dpr = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
-  return Math.min(dpr, MAX_PIXEL_RATIO);
 }
 
 /** Disposes geometries, materials and their textures still attached to a scene graph. */
@@ -44,7 +44,7 @@ function disposeTree(root: THREE.Object3D): void {
 
 /**
  * Composes terrain, sky, props and the first-person controller; owns the render loop, resizing,
- * pausing while the tab is hidden and disposal.
+ * pausing while the tab is hidden, adaptive resolution and disposal.
  */
 export function createMoonbaseExperience(mount: HTMLElement, opts: ExperienceOptions): ExperienceHandle {
   const sizeOf = () => ({
@@ -60,7 +60,11 @@ export function createMoonbaseExperience(mount: HTMLElement, opts: ExperienceOpt
     preserveDrawingBuffer: Boolean(opts.debugPose),
   });
   configureRenderer(renderer, opts.lowPower);
-  renderer.setPixelRatio(pickPixelRatio(window.devicePixelRatio, opts.lowPower));
+  let basePixelRatio = pickPixelRatio(window.devicePixelRatio, opts.lowPower);
+  // Adaptive resolution trades sharpness for frame rate on slow GPUs. Off for a debug pose so
+  // screenshots stay deterministic.
+  const adaptive = opts.debugPose ? null : createAdaptiveResolution(basePixelRatio);
+  renderer.setPixelRatio(adaptive ? adaptive.ratio : basePixelRatio);
   renderer.setSize(w, h, false);
   const canvas = renderer.domElement;
   canvas.style.display = 'block';
@@ -111,8 +115,10 @@ export function createMoonbaseExperience(mount: HTMLElement, opts: ExperienceOpt
   const tick = (now: number) => {
     if (!running) return;
     rafId = requestAnimationFrame(tick);
-    const dt = Math.min(Math.max((now - last) / 1000, 0), 1 / 20);
+    const frameMs = now - last;
+    const dt = Math.min(Math.max(frameMs / 1000, 0), 1 / 20);
     last = now;
+    if (adaptive && updateAdaptiveResolution(adaptive, frameMs)) renderer.setPixelRatio(adaptive.ratio);
     elapsed += dt;
     frame.dt = dt;
     frame.elapsed = elapsed;
@@ -127,6 +133,8 @@ export function createMoonbaseExperience(mount: HTMLElement, opts: ExperienceOpt
     if (running || disposed || contextLost) return;
     running = true;
     last = performance.now();
+    // Time spent hidden or without a context is not a slow frame.
+    if (adaptive) resetAdaptiveWindow(adaptive);
     rafId = requestAnimationFrame(tick);
   };
   const stop = () => {
@@ -154,7 +162,16 @@ export function createMoonbaseExperience(mount: HTMLElement, opts: ExperienceOpt
 
   const applySize = () => {
     const next = sizeOf();
-    if (next.w === w && next.h === h) return;
+    const nextBase = pickPixelRatio(window.devicePixelRatio, opts.lowPower);
+    if (next.w === w && next.h === h && nextBase === basePixelRatio) return;
+    if (nextBase !== basePixelRatio) {
+      basePixelRatio = nextBase;
+      if (adaptive) setAdaptiveMaxRatio(adaptive, nextBase);
+      // setPixelRatio() resizes the drawing buffer with the old CSS size; setSize() below fixes it.
+      renderer.setPixelRatio(adaptive ? adaptive.ratio : nextBase);
+    }
+    // A resize changes the pixel count: measure the new size from a clean window.
+    if (adaptive) resetAdaptiveWindow(adaptive);
     w = next.w;
     h = next.h;
     camera.aspect = w / h;

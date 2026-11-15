@@ -58,6 +58,24 @@ describe('sun sprite profile', () => {
     expect(sunProfile(40, 0, -1)).toBeGreaterThan(sunProfile(40, 0, 1) * 1.3);
   });
 
+  it('keeps the inner shoulder at the level measured around the core centroid', () => {
+    // Radial means (×255) around the centroid of the saturated core on the full-res reference frames
+    // t08/t21/t30/t47 (min–max over the four frames). Single-row samples from a centroid polluted by
+    // other bright pixels read much higher (138–229 at r 8) and are not a property of the halo.
+    const ref: [number, number, number][] = [
+      [7, 92, 109],
+      [8, 86, 105],
+      [10, 75, 93],
+      [12, 65, 81],
+      [16, 54, 66],
+    ];
+    for (const [r, lo, hi] of ref) {
+      const v = sunProfile(r) * 255;
+      expect(v).toBeGreaterThanOrEqual(lo - 3);
+      expect(v).toBeLessThanOrEqual(hi + 3);
+    }
+  });
+
   it('decreases monotonically with radius and fits inside the quad in every direction', () => {
     for (let a = 0; a < 360; a += 15) {
       const dx = Math.cos((a * Math.PI) / 180);
