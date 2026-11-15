@@ -24,11 +24,12 @@ export const TANK_MAST_TOP = 2.6;
 export const TANK_UV_HEIGHT = 2.0;
 
 /**
- * Suggested tank paint (lavender grey), calibrated for the round-2 lighting so the lit flank
- * peaks near the reference (~140–185) and the shadow side is not crushed: use as the
- * MeshStandardMaterial colour/roughness/metalness together with `tankDetailMap`.
+ * Suggested tank paint (lavender grey) for MeshStandardMaterial with `tankDetailMap`. Round 4,
+ * t18.5 at full resolution: the lit edge read 178 against the reference's 181–186 with the same
+ * falloff to the terminator, so the metalness drops to 0.04 (≈ +6 % diffuse, ≈ +5 levels on the lit
+ * flank; the shaded partner tanks stay at ≈ 30, reference 24–38).
  */
-export const TANK_PAINT = { color: 0xcbcad4, roughness: 0.42, metalness: 0.1 } as const;
+export const TANK_PAINT = { color: 0xcbcad4, roughness: 0.42, metalness: 0.04 } as const;
 
 /** Profile heights (m) shared with the texture painter. */
 export const TANK_PROFILE = {

@@ -33,12 +33,15 @@ export interface CrateSpec {
 
 /**
  * Sizes measured on the reference frames against the 1.7 m eye height and the horizon (t18.5:
- * ground tanks ≈ 1.75 m, container front-top edge ≈ 1.0–1.1 m over a ≈ 2.35 m length;
- * t41.5/t43: row modules ≈ 0.6 × tank height).
+ * ground tanks ≈ 1.75 m; t41.5/t43: row modules ≈ 0.6 × tank height). Hazard containers, round 4:
+ * at full resolution in t18.5 the front container's pillar tops stand ≈ 1.0–1.13 m over a labelled
+ * face ≈ 1.7–2.06 m long once perspective is undone (vanishing points of its top / bottom edges),
+ * i.e. height / length ≈ 0.55–0.6, and its faces read 0.58 (t18.5) – 0.69 (t15) on screen; the
+ * round-3 box (1.17 / 2.35 = 0.5) read low and long. Now 1.21 / 1.9 ≈ 0.64.
  */
 export const CRATE_SPECS: Record<CrateStyle, CrateSpec> = {
   // dirty-white hazard containers next to the ship (t12–t18.5)
-  hazard: { kind: 'container', w: 2.35, h: 1.1, d: 1.3, chamfer: 0.05, lid: { inset: 0.42, t: 0.07 }, fallbackColor: 0xd2cac6, roughness: 0.6, metalness: 0.04 },
+  hazard: { kind: 'container', w: 1.9, h: 1.14, d: 1.3, chamfer: 0.05, lid: { inset: 0.42, t: 0.07 }, fallbackColor: 0xd2cac6, roughness: 0.6, metalness: 0.02 },
   // white modular containers with dark diagonal panels (t41.5/t43 row, greenhouse ring)
   row: { kind: 'module', w: 2.4, h: 1.05, d: 1.1, chamfer: 0.09, fallbackColor: 0xd6d5d2, roughness: 0.55, metalness: 0.04 },
   // charcoal crates of the same family with worn white edges and ochre stripes (t01, f_041)
@@ -90,10 +93,11 @@ export interface ContainerLayout {
 export function containerLayout(spec: CrateSpec, style: CrateStyle): ContainerLayout {
   const { w, h, d } = spec;
   const rim = spec.lid?.t ?? 0.07;
-  // measured on t18.5: corner pillar ≈ 12 % of the length, stripe channel ≈ 6 %, main face ≈ 60 %;
-  // the pillars stand proud of the face plates and rise above the rim (stacking posts)
-  const cb = 0.27;
-  const sc = 0.14;
+  // measured on t18.5: corner pillar ≈ 12–13 % of the length, stripe channel ≈ 6–7 %, main face ≈
+  // 60 %; the pillars stand proud of the face plates and rise above the rim (stacking posts). Capped
+  // at the round-3 sizes, so the 2.4 m dark crates keep their look.
+  const cb = Math.min(0.27, 0.13 * w);
+  const sc = Math.min(0.14, 0.07 * w);
   const pi = 0.06;
   const base = 0.05;
   const m = w / 2 - cb - sc;

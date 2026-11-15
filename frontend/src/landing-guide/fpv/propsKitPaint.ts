@@ -217,13 +217,13 @@ interface ContainerPalette {
 const CHIP = '#2e2a2b';
 
 const HAZARD: ContainerPalette = {
-  body: '#f5eef2',
-  bodyGrain: '120,112,114',
-  recess: '#ebe4e8',
-  block: '#f4edf1',
+  body: '#f5eef3',
+  bodyGrain: '118,112,116',
+  recess: '#ebe4e9',
+  block: '#f4edf2',
   seam: '#6a6365',
   edge: '#fbf8f8',
-  grime: '112,102,100',
+  grime: '108,102,106',
   stripeA: '#f4e8b0',
   stripeB: '#cbc5cb',
   stripeWear: '246,242,242',
@@ -231,8 +231,8 @@ const HAZARD: ContainerPalette = {
   endRecess: '#28272a',
   endEdge: '#e2dcdd',
   bar: '#48474b',
-  rimTop: '#f7f2f3',
-  topInner: '#ede7e8',
+  rimTop: '#f7f2f4',
+  topInner: '#ede7e9',
   slot: '#29282b',
   base: '#3c3a3b',
   lid: '#ede7e8',
@@ -825,6 +825,14 @@ export function crateAtlas(style: CrateStyle, lowPower: boolean, seed: number): 
 export const CRATE_BOUNCE_BOOST: Record<CrateStyle, number> = { hazard: 1.15, row: 2.5, dark: 1.5 };
 
 /**
+ * Paint gain on top of the albedo atlas (material colour = gain × atlas). The hazard atlas is
+ * already near white, yet its sunlit front faces read 173–183 against the reference's 197–211
+ * (t15–t18.5); a small gain above 1 is the only way to lift them further. Sun-facing faces still stay
+ * below clipping: ≈ 0.88 · 1.0 · cos θ − 0.04 linear at most with the neutral tone mapper.
+ */
+export const CRATE_PAINT_GAIN: Record<CrateStyle, number> = { hazard: 1.13, row: 1, dark: 1 };
+
+/**
  * Lets a standard material use the scene's environment at `boost` × scene.environmentIntensity
  * (three.js otherwise forces the scene value onto materials without their own envMap). Tracks the
  * scene each frame, so it follows an environment swap or removal (lowPower: none, no-op).
@@ -857,7 +865,7 @@ export function createCrateMaterial(
   const spec = CRATE_SPECS[style];
   const maps = crateMaps(style, lowPower, seed);
   const params: THREE.MeshStandardMaterialParameters = {
-    color: maps ? 0xffffff : spec.fallbackColor,
+    color: maps ? new THREE.Color().setScalar(CRATE_PAINT_GAIN[style]) : spec.fallbackColor,
     map: maps?.map ?? null,
     bumpMap: maps?.bump ?? null,
     bumpScale: 1.2,

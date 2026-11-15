@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { CRATE_SPECS, containerLayout, crateGeometry, moduleLayout } from './propsCrates';
-import { bindEnvironmentBoost, CRATE_BOUNCE_BOOST, createCrateMaterial } from './propsKitPaint';
+import { bindEnvironmentBoost, CRATE_BOUNCE_BOOST, CRATE_PAINT_GAIN, createCrateMaterial } from './propsKitPaint';
 import {
   ROVER_BEACON,
+  ROVER_DECK_PANEL,
   ROVER_HALF_LENGTH,
   ROVER_HALF_WIDTH,
   ROVER_HEIGHT,
+  ROVER_TRAY_TOP,
   ROVER_WHEEL_RADIUS,
   ROVER_WHEEL_WIDTH,
   ROVER_WHEEL_Z,
@@ -46,8 +48,17 @@ describe('props kit: crates', () => {
       const s = CRATE_SPECS[style];
       expect(s.h + (s.lid?.t ?? 0)).toBeGreaterThan(0.55 * EYE);
       expect(s.h + (s.lid?.t ?? 0)).toBeLessThan(0.8 * EYE);
-      expect(s.w / s.h).toBeGreaterThan(1.8);
     }
+    // dark crates stay long and low (t01 row); the white hazard containers are shorter and taller:
+    // t18.5 pillar top / labelled face ≈ 0.55–0.6 once perspective is undone, 0.58–0.69 on screen
+    expect(CRATE_SPECS.dark.w / CRATE_SPECS.dark.h).toBeGreaterThan(1.8);
+    const hz = CRATE_SPECS.hazard;
+    const hzH = hz.h + (hz.lid?.t ?? 0);
+    expect(hzH / hz.w).toBeGreaterThan(0.58);
+    expect(hzH / hz.w).toBeLessThan(0.72);
+    // still a container next to the 1.8 m tanks, not a cube
+    expect(hzH / TANK_HEIGHT).toBeLessThan(0.72);
+    expect(hz.w).toBeGreaterThan(hz.d);
     const row = CRATE_SPECS.row;
     expect(row.h / TANK_HEIGHT).toBeGreaterThan(0.5);
     expect(row.h / TANK_HEIGHT).toBeLessThan(0.7);
@@ -127,6 +138,25 @@ describe('props kit: crates', () => {
       expect(tris(g)).toBeLessThan(2000);
       g.dispose();
     }
+  });
+
+  it('scales the stripe and pillar widths down with a shorter container but keeps the dark crates', () => {
+    const hz = containerLayout(CRATE_SPECS.hazard, 'hazard');
+    const dk = containerLayout(CRATE_SPECS.dark, 'dark');
+    expect(dk.cb).toBeCloseTo(0.27, 6);
+    expect(dk.sc).toBeCloseTo(0.14, 6);
+    expect(hz.cb / CRATE_SPECS.hazard.w).toBeGreaterThan(0.11);
+    expect(hz.cb / CRATE_SPECS.hazard.w).toBeLessThan(0.14);
+    // main face ≈ 60 % of the length, label inside it
+    expect((2 * hz.m) / CRATE_SPECS.hazard.w).toBeGreaterThan(0.55);
+    expect(hz.label.x).toBeLessThan(hz.m);
+  });
+
+  it('lifts the near-white hazard paint above the atlas and leaves the other families alone', () => {
+    expect(CRATE_PAINT_GAIN.hazard).toBeGreaterThan(1);
+    expect(CRATE_PAINT_GAIN.hazard).toBeLessThan(1.25);
+    expect(CRATE_PAINT_GAIN.row).toBe(1);
+    expect(CRATE_PAINT_GAIN.dark).toBe(1);
   });
 
   it('falls back to plain colours without a 2D canvas', () => {
@@ -221,6 +251,31 @@ describe('props kit: rover', () => {
     expect(Math.abs(ROVER_BEACON.z) * 2).toBeLessThan(0.3);
     expect(b.min.y).toBeGreaterThanOrEqual(-0.01);
     expect(tris(g)).toBeLessThan(15000);
+    g.dispose();
+  });
+
+  it('carries a raised white deck panel on top of the tray', () => {
+    const g = roverGeometry(false);
+    const pos = g.getAttribute('position');
+    const nrm = g.getAttribute('normal');
+    const col = g.getAttribute('color');
+    const D = ROVER_DECK_PANEL;
+    let area = 0;
+    for (let i = 0; i + 2 < pos.count; i += 3) {
+      if (nrm.getY(i) < 0.99) continue;
+      const y = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
+      if (Math.abs(y - D.top) > 1e-3) continue;
+      // light, near-neutral vertex colour (linear)
+      if (col.getX(i) < 0.6 || col.getY(i) < 0.6 || col.getZ(i) < 0.6) continue;
+      const a = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+      const b = new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
+      const c = new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
+      area += b.sub(a).cross(c.sub(a)).length() / 2;
+    }
+    // most of the panel's top reads white (joints and hatch are dark), over a large part of the deck
+    expect(area).toBeGreaterThan(0.6 * (D.x1 - D.x0) * 2 * D.z);
+    expect(D.top - ROVER_TRAY_TOP).toBeGreaterThan(0.05);
+    expect(D.top).toBeLessThan(ROVER_HEIGHT - 0.2);
     g.dispose();
   });
 
