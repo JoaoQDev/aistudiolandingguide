@@ -1,7 +1,17 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { createMoonbase } from './props';
-import { bearing, GREENHOUSE_CENTER, GREENHOUSE_RADIUS, LAYOUT_SUN_AZIMUTH_DEG, REFERENCE_POSES, SUNWARD_CRATES } from './propsLayout';
+import {
+  bearing,
+  GREENHOUSE_CENTER,
+  GREENHOUSE_RADIUS,
+  LAYOUT_SUN_AZIMUTH_DEG,
+  MOONBASE_SPAWN,
+  REFERENCE_POSES,
+  shipLocal,
+  SUNWARD_CRATES,
+  T01_DARK_ROW,
+} from './propsLayout';
 import { SHIP_HEIGHT, SHIP_LENGTH } from './propsShip';
 import { TANK_HEIGHT } from './propsTanks';
 import { WALK_RADIUS_M } from './types';
@@ -150,6 +160,61 @@ describe('createMoonbase', () => {
     const mat = mesh.material as THREE.MeshBasicMaterial;
     expect(mat.depthWrite).toBe(false);
     expect(mat.transparent).toBe(true);
+    base.dispose();
+  });
+
+  it('spawns at the t01 pose with one low row of four dark crates on its left', () => {
+    expect(REFERENCE_POSES.t01).toEqual(MOONBASE_SPAWN);
+    const base = createMoonbase({ seed: 4, lowPower: true, heightAt: () => 0 });
+    expect(base.spawn).toEqual(MOONBASE_SPAWN);
+    const dark = base.object.getObjectByName('crates-dark') as THREE.InstancedMesh;
+    const m = new THREE.Matrix4();
+    const p = new THREE.Vector3();
+    const halfH = Math.atan(Math.tan((30 * Math.PI) / 180) * (1920 / 940)) * (180 / Math.PI);
+    let row = 0;
+    for (let i = 0; i < dark.count; i++) {
+      dark.getMatrixAt(i, m);
+      p.setFromMatrixPosition(m);
+      if (Math.hypot(p.x - T01_DARK_ROW.x, p.z - T01_DARK_ROW.z) > 4) continue;
+      row++;
+      expect(p.y).toBeLessThan(0.1); // a single level, nothing stacked
+      let rel = (bearing(MOONBASE_SPAWN.x, MOONBASE_SPAWN.z, p.x, p.z) - MOONBASE_SPAWN.yawDeg) % 360;
+      if (rel > 180) rel -= 360;
+      if (rel < -180) rel += 360;
+      expect(rel).toBeLessThan(-20); // left part of the t01 frame (or just beyond its edge)
+      expect(rel).toBeGreaterThan(-halfH - 12);
+    }
+    expect(row).toBe(4);
+    base.dispose();
+  });
+
+  it('keeps the front tanks of the flank group out of each other\'s low-Sun shadow (t15–t18.5)', () => {
+    const base = createMoonbase({ seed: 6, lowPower: true, heightAt: () => 0 });
+    const tanks = base.object.getObjectByName('tanks') as THREE.InstancedMesh;
+    const centre = shipLocal(-3.6, 8.9);
+    const m = new THREE.Matrix4();
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i < tanks.count; i++) {
+      tanks.getMatrixAt(i, m);
+      const p = new THREE.Vector3().setFromMatrixPosition(m);
+      if (p.y < 0.5 && Math.hypot(p.x - centre.x, p.z - centre.z) < 3) pts.push(p);
+    }
+    expect(pts.length).toBe(4);
+    // shadows run away from the Sun (azimuth + 180°); u = offset across the shadow direction
+    const a = ((LAYOUT_SUN_AZIMUTH_DEG + 180) * Math.PI) / 180;
+    const sx = Math.sin(a);
+    const sz = -Math.cos(a);
+    const pose = REFERENCE_POSES['t18.5'];
+    const front = [...pts].sort((p, q) => Math.hypot(p.x - pose.x, p.z - pose.z) - Math.hypot(q.x - pose.x, q.z - pose.z)).slice(0, 2);
+    for (const t of front)
+      for (const o of pts) {
+        if (o === t) continue;
+        const dx = t.x - o.x;
+        const dz = t.z - o.z;
+        const along = dx * sx + dz * sz;
+        const across = Math.abs(-dx * sz + dz * sx);
+        if (along > 0) expect(across, 'front tank inside another tank\'s shadow').toBeGreaterThan(0.8);
+      }
     base.dispose();
   });
 });

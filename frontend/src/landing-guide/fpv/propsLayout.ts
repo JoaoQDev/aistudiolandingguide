@@ -23,21 +23,30 @@ export function bearing(fx: number, fz: number, tx: number, tz: number): number 
 }
 
 /**
- * The ship cluster (ship, its container/tank groups, the dark crate row and rover 1) is laid out
- * around the spawn and turned by SHIP_CLUSTER_TURN_DEG about it, so that in the ship-side frames
+ * The ship cluster (ship and its container/tank groups) is laid out around the origin (the
+ * round-3 spawn) and turned by SHIP_CLUSTER_TURN_DEG about it, so that in the ship-side frames
  * (t01, t05, t15–t18.5) the Sun sits ≈ 100° left of the view axis as in the reference (tanks lit
  * on their left edge, terminator ≈ 60 % across) while the sunward frames keep it clear.
  */
 export const SHIP_CLUSTER_TURN_DEG = -60;
 
-/** Spawn = reference frame t01: ship ahead-right, rover and dark crate row on the left. */
-export const MOONBASE_SPAWN: SpawnPose = { x: 0, z: 0, yawDeg: (50 + SHIP_CLUSTER_TURN_DEG + 360) % 360, pitchDeg: -4 };
+/**
+ * Spawn = reference frame t01 (critic-verified pose): ship ahead, slightly right of centre; rover
+ * and the low dark crate row on the left.
+ */
+export const MOONBASE_SPAWN: SpawnPose = { x: 7, z: 1, yawDeg: 342, pitchDeg: -4 };
+
+/** Point `ahead` metres along a pose's view axis and `right` metres to its right (negative = left). */
+export function viewPoint(pose: SpawnPose, ahead: number, right: number): { x: number; z: number } {
+  const y = pose.yawDeg * DEG;
+  return { x: pose.x + Math.sin(y) * ahead + Math.cos(y) * right, z: pose.z - Math.cos(y) * ahead + Math.sin(y) * right };
+}
 
 /** Ship centre and the azimuth of its nose → tail axis (+X local); its +Z flank faces the spawn. */
 export const SHIP_CENTER = polar(54.5 + SHIP_CLUSTER_TURN_DEG, 36);
 export const SHIP_AXIS_AZ = 130 + SHIP_CLUSTER_TURN_DEG;
 
-/** A point of the ship cluster authored at bearing `bearingDeg` / `dist` from the spawn. */
+/** A point of the ship cluster authored at bearing `bearingDeg` / `dist` from the origin. */
 export const clusterPolar = (bearingDeg: number, dist: number) => polar(bearingDeg + SHIP_CLUSTER_TURN_DEG, dist);
 
 /** A ship-side pose authored in the unturned cluster frame, turned with the cluster about the spawn. */
@@ -58,16 +67,57 @@ export function shipLocal(lx: number, lz: number): { x: number; z: number } {
 }
 
 /**
- * Backlit group toward the Sun (t08, t12, t21, t30): row modules with a light module on top, and a
- * tank pair 8 m beyond them.
+ * Low row of four dark crates on the left of t01: parked side by side with their short striped
+ * ends toward the spawn (two touching pairs), front ends ≈ 9.8 m ahead: at the t01 pose the row is
+ * ≈ 100 px tall and runs from x ≈ 490 px out past the left edge, as in the reference.
  */
-export const SUNWARD_CRATES = { x: -24, z: 8 };
-export const SUNWARD_TANKS = polar(226, 8.3, SUNWARD_CRATES.x, SUNWARD_CRATES.z);
-/** Lone dark crate 6 m beyond the group on the t12 line of sight (t47 foreground). */
-export const SUNWARD_LONE_CRATE = polar(273.7, 6.2, SUNWARD_CRATES.x, SUNWARD_CRATES.z);
+export const T01_DARK_ROW = { ...viewPoint(MOONBASE_SPAWN, 11.0, -9.85), yawDeg: MOONBASE_SPAWN.yawDeg };
+/** Rover 1: ≈ 15 m from the spawn at x ≈ 610 px in t01 (just right of the row), close on the left in t05. */
+export const T01_ROVER = { ...polar(MOONBASE_SPAWN.yawDeg - 23.3, 15, MOONBASE_SPAWN.x, MOONBASE_SPAWN.z), yawDeg: 50 };
 
-/** Viewpoint the second container row is composed around (t41.5, t43, t47). */
+/**
+ * Backlit group toward the Sun (t08, t12, t21, t30): row modules turned to recede to the right
+ * in t12 with a light module on top at the back-left, and four tanks in two pairs 8 m beyond.
+ * The group and its poses (t12, t21, t30) were shifted together by SUNWARD_SHIFT in round 4 so
+ * that the t21/t30 camera stands clear of the t01 dark crate row; their framing is unchanged.
+ */
+export const SUNWARD_SHIFT = { x: -4, z: 2 };
+export const SUNWARD_CRATES = { x: -24 + SUNWARD_SHIFT.x, z: 8 + SUNWARD_SHIFT.z };
+export const SUNWARD_TANKS = polar(226, 8.3, SUNWARD_CRATES.x, SUNWARD_CRATES.z);
+/**
+ * Sunward valley viewpoint (t37, t39, t47: rolling horizon, no ship in view) and the lone dark crate
+ * with a free top in the t47 foreground (≈ 3 m away, ≈ 41° left of the view axis).
+ */
+export const T47_VIEW: SpawnPose = { x: -29.2, z: 5.48, yawDeg: 240.1, pitchDeg: 0.3 };
+export const T47_CRATE = { x: T47_VIEW.x - 0.99, z: T47_VIEW.z + 2.86, yawDeg: 196 };
+const sunwardPose = (x: number, z: number, yawDeg: number, pitchDeg: number): SpawnPose => ({
+  x: Math.round((x + SUNWARD_SHIFT.x) * 100) / 100,
+  z: Math.round((z + SUNWARD_SHIFT.z) * 100) / 100,
+  yawDeg,
+  pitchDeg,
+});
+
+/** Viewpoint the second container row is composed around (t41.5, t43). */
 export const T41_VIEW: SpawnPose = { x: 70, z: -70, yawDeg: 42, pitchDeg: -3 };
+/**
+ * Second container row (three modules) seen from T41_VIEW: its near end at x ≈ 1115 px, its far
+ * end at x ≈ 1515 px and higher up the knoll's west flank (the knoll is centred ≈ 55 m east).
+ */
+export const T41_ROW = {
+  left: polar(T41_VIEW.yawDeg + 11, 12.5, T41_VIEW.x, T41_VIEW.z),
+  right: polar(T41_VIEW.yawDeg + 33, 18, T41_VIEW.x, T41_VIEW.z),
+};
+/** Four tanks in a loose overlapping line just beyond the row's far end (x ≈ 1475–1775 px). */
+export const T41_TANKS = {
+  ...polar(T41_VIEW.yawDeg + 39, 16.5, T41_VIEW.x, T41_VIEW.z),
+  yawDeg: 168,
+  items: [
+    [-1.25, 0.2],
+    [-0.4, 0],
+    [0.45, 0.3],
+    [1.3, 0],
+  ] as [number, number][],
+};
 
 /**
  * Greenhouse: far beyond the sunward crest. In the reference it keeps the same bearing (≈ 13–14°
@@ -88,15 +138,15 @@ export const REFERENCE_POSES: Record<string, SpawnPose> = {
   t01: { ...MOONBASE_SPAWN },
   t05: { x: 2.7, z: -12.11, yawDeg: 294.1, pitchDeg: -2.4 },
   t08: { x: 1.63, z: 8.77, yawDeg: 243.3, pitchDeg: -15.5 },
-  t12: { x: -5.24, z: 9.21, yawDeg: 262.2, pitchDeg: -2.1 },
+  t12: sunwardPose(-5.24, 9.21, 262.2, -2.1),
   t15: clusterPose(8.72, -9.89, 54.3, -0.7),
   t17: clusterPose(13.31, -12.0, 73.7, -3.9),
   't18.5': clusterPose(16.64, -13.15, 70.3, -1.0),
-  t21: { x: -4.34, z: -3.35, yawDeg: 257.7, pitchDeg: -2.6 },
-  t30: { x: -4.34, z: -3.35, yawDeg: 241.6, pitchDeg: -4.5 },
+  t21: sunwardPose(-4.34, -3.35, 257.7, -2.6),
+  t30: sunwardPose(-4.34, -3.35, 241.6, -4.5),
   t37: { x: -34, z: 12, yawDeg: 243.15, pitchDeg: -4.95 },
   t39: { x: -33, z: 9, yawDeg: 254.9, pitchDeg: -7.4 },
   't41.5': { ...T41_VIEW, pitchDeg: -9 },
   t43: { x: 70.5, z: -69.5, yawDeg: 41, pitchDeg: -8 },
-  t47: { x: -29.2, z: 5.48, yawDeg: 240.1, pitchDeg: 0.3 },
+  t47: { ...T47_VIEW },
 };
