@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lunar-science"
+version = "0.2.0"
+description = "Scientific engine and precomputation pipeline for Lunar Landing Site Navigator"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=1.26",
+  "spiceypy==8.0.0",
+  "skyfield>=1.49",
+  "jsonschema==4.23.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.5", "jsonschema==4.23.0", "build==1.2.2.post1"]
+
+[project.scripts]
+lunar-science = "lunar_science.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+lunar_science = ["schemas/*.json"]

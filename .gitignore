@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+*.tsbuildinfo
+build/
+.vercel/
+science/.cache/
+science/.kernels/
+science/.data/
