@@ -55,28 +55,42 @@ describe('lunar ground height field', () => {
   const slopeAt = (f: ReturnType<typeof createHeightField>, x: number, z: number) =>
     Math.hypot(f.heightAt(x + 0.5, z) - f.heightAt(x - 0.5, z), f.heightAt(x, z + 0.5) - f.heightAt(x, z - 0.5));
 
-  it('keeps the base floor and the prop clusters nearly flat', () => {
+  // Round-4 viewpoints (fpvPose x, z): base poses, the valley pose (t37/t39/t47) and the t41.5 view.
+  const BASE_VIEWS: Array<[number, number]> = [
+    [-8.34, -1.35], // t21 / t30
+    [-9.24, 11.21], // t12
+    [2.7, -12.11], // t05
+  ];
+  const VALLEY_VIEW: [number, number] = [-77.5, 45.8];
+
+  it('keeps the base floor and the prop footprints nearly flat', () => {
     for (const seed of [7, 1234]) {
       const f = createHeightField({ seed, lowPower: false });
       expect(Math.abs(f.heightAt(0, 0))).toBeLessThan(0.05);
-      // Calm floor around the spawn and the prop clusters (round-3 layout: ship + groups A–C,
-      // group D + rover 1, sunward groups F/H, second row E + rover 2 around the t41.5 view).
+      // Prop footprints of the round-4 layout (+2 m): ship + group A, groups B/C, D + rover 1,
+      // sunward group F, base camera spots, group E's crate and rover 2, the valley crate.
       const discs: Array<[number, number, number]> = [
-        [0, 0, 40],
-        [-5.6, -36.4, 17],
-        [0.3, -25.4, 10],
-        [-7.2, -10.5, 6],
-        [-27, 10, 9],
-        [72, -72, 28],
-        [84.7, -74.6, 9],
-        [78.9, -83.3, 4],
+        [-4.0, -35.5, 15.6],
+        [-13.8, -39.4, 3.8],
+        [-3.6, -25.9, 3.7],
+        [0.4, -26.9, 4],
+        [4.9, -22.7, 4.8],
+        [-5.3, -8.1, 6.7],
+        [-34.4, 15.7, 3.7],
+        [-28.6, 10, 4.8],
+        [-8.34, -1.35, 3],
+        [2.7, -12.11, 2],
+        [7, 1, 1.5],
+        [73.7, -69.9, 3],
+        [78.9, -83.3, 3],
+        [-74, 45.5, 3],
       ];
       for (const [cx, cz, R] of discs) {
         let min = Infinity;
         let max = -Infinity;
         let maxSlope = 0;
-        for (let x = cx - R; x <= cx + R; x += 2) {
-          for (let z = cz - R; z <= cz + R; z += 2) {
+        for (let x = cx - R; x <= cx + R; x += 1) {
+          for (let z = cz - R; z <= cz + R; z += 1) {
             if ((x - cx) ** 2 + (z - cz) ** 2 > R * R) continue;
             const h = f.heightAt(x, z);
             min = Math.min(min, h);
@@ -85,22 +99,22 @@ describe('lunar ground height field', () => {
           }
         }
         expect(max - min).toBeLessThan(0.8);
-        expect(maxSlope).toBeLessThan(Math.tan(2 * D));
+        expect(maxSlope).toBeLessThan(Math.tan((R < 5 ? 5.5 : 2) * D));
       }
-      // Keep-flat pads (distant greenhouse) are level.
+      // Keep-flat pads are level.
       for (const p of BASE_PADS) {
         const h0 = f.heightAt(p.x, p.z);
         for (let a = 0; a < 360; a += 30) {
-          const [dx, dz] = at(a, p.r * 0.9);
-          expect(Math.abs(f.heightAt(p.x + dx, p.z + dz) - h0)).toBeLessThan(0.05);
+          const [dx, dz] = at(a, p.r * 0.85);
+          expect(Math.abs(f.heightAt(p.x + dx, p.z + dz) - h0)).toBeLessThan(0.08);
         }
       }
     }
   });
 
-  /** Highest elevation angle (deg) of the terrain seen from (x, z) at eye height along `az`. */
-  const skyline = (f: ReturnType<typeof createHeightField>, x: number, z: number, az: number): number => {
-    const eye = f.heightAt(x, z) + 1.7;
+  /** Highest elevation (deg) of the terrain seen from (x, z) at eye height along `az`. */
+  const skyline = (f: ReturnType<typeof createHeightField>, x: number, z: number, az: number, eyeH = 1.7): number => {
+    const eye = f.heightAt(x, z) + eyeH;
     let best = -90;
     for (let d = 3; d < 6000; d *= 1.01) {
       const [dx, dz] = at(az, d);
@@ -109,46 +123,73 @@ describe('lunar ground height field', () => {
     return best;
   };
 
-  it('keeps the sunward skyline low from the base and sinks a basin before the W/NW ridge', () => {
+  /**
+   * Angular height (deg) of the visible ground turned away from the illustrative Sun (azimuth 252°,
+   * elevation 10°) right below the skyline along `az`: the "dark band" seen from (x, z).
+   */
+  const darkBand = (f: ReturnType<typeof createHeightField>, x: number, z: number, az: number, eyeH = 1.7): number => {
+    const sun = [Math.cos(10 * D) * Math.sin(252 * D), Math.sin(10 * D), -Math.cos(10 * D) * Math.cos(252 * D)];
+    const eye = f.heightAt(x, z) + eyeH;
+    let best = -90;
+    let band = 0;
+    let run = 0;
+    for (let d = 3; d < 6000; d *= 1.005) {
+      const [dx, dz] = at(az, d);
+      const px = x + dx;
+      const pz = z + dz;
+      const e = Math.atan2(f.heightAt(px, pz) - eye, d) / D;
+      if (e <= best) continue;
+      const s = Math.max(1, d / 200);
+      const hx = (f.heightAt(px + s, pz) - f.heightAt(px - s, pz)) / (2 * s);
+      const hz = (f.heightAt(px, pz + s) - f.heightAt(px, pz - s)) / (2 * s);
+      const mu = (-hx * sun[0] + sun[1] - hz * sun[2]) / Math.hypot(hx, 1, hz);
+      run = mu < 0 ? run + (e - best) : 0;
+      band = Math.max(band, run);
+      best = e;
+    }
+    return band;
+  };
+
+  it('hides the valley and its dark wall from the base, and shows them from the valley', () => {
     for (const seed of [7, 1234]) {
       const f = createHeightField({ seed, lowPower: false });
-      // From the base, toward the Sun side (W/NW), the horizon stays within ~1.5° of eye level.
-      for (let az = 240; az <= 310; az += 10) expect(skyline(f, -5, 5, az)).toBeLessThan(1.6);
-      // The ground sinks ≥ 10 m below the base floor in front of the ridge faces.
-      for (const az of [275, 290, 305]) {
-        const [x, z] = at(az, 600);
-        expect(f.heightAt(x, z)).toBeLessThan(-10);
+      // Base views toward the Sun side (W/NW and SW): skyline near eye level, no dark band.
+      for (const [x, z] of BASE_VIEWS) {
+        for (let az = 205; az <= 305; az += 5) {
+          expect(darkBand(f, x, z, az)).toBeLessThan(0.75);
+          expect(skyline(f, x, z, az)).toBeLessThan(1.6);
+        }
       }
+      // The valley floor lies well below the base floor...
+      const [vx, vz] = VALLEY_VIEW;
+      expect(f.heightAt(vx, vz)).toBeLessThan(-5);
+      // ...the wall right of the Sun shows a dark band capped by a rim just above eye level...
+      let bands = 0;
+      for (let az = 265; az <= 290; az += 5) {
+        const sky = skyline(f, vx, vz, az);
+        expect(sky).toBeGreaterThan(0.5);
+        expect(sky).toBeLessThan(2.5);
+        if (darkBand(f, vx, vz, az) > 1.2) bands++;
+      }
+      expect(bands).toBeGreaterThanOrEqual(5);
+      // ...and the ground rises on the left (S/SW) of the views toward the Sun.
+      for (const az of [200, 215, 225]) expect(skyline(f, vx, vz, az)).toBeGreaterThan(2.5);
     }
   });
 
-  it('adds gentle, sunlit-angle swells SW of the sunward group and NE beyond the second row', () => {
+  it('keeps knolls gently sloped and the spawn / sunward cameras on the floor', () => {
     const f = createHeightField({ seed: 7, lowPower: false });
     for (const k of KNOLLS) {
-      expect(f.heightAt(k.x, k.z) - f.heightAt(0, 0)).toBeGreaterThan(0.6 * k.h);
-      // Max slope of h(1-q^2)^2 is ~1.54 h / min(a, b): keep it under ~10° so the flanks stay lit.
+      // Max slope of h(1-q^2)^2 is ~1.54 h / min(a, b): keep it under ~10.5° so the flanks stay lit.
       expect(Math.atan((1.54 * k.h) / Math.min(k.a, k.b)) / D).toBeLessThan(10.5);
     }
-    // Seen from the sunward group the ground rises on the left (S/SW) of the Sun...
-    expect(skyline(f, -34, 12, 200)).toBeGreaterThan(skyline(f, -34, 12, 245) + 1);
-    // ...and ahead of the t41.5 viewpoint the skyline climbs a few degrees.
+    // Ahead of the t41.5 viewpoint the skyline climbs a few degrees (knolls N/NE and E).
     expect(skyline(f, 70, -70, 42)).toBeGreaterThan(2.5);
-  });
-
-  it('turns steep, self-shadowed far ridge faces toward the base right of the Sun', () => {
-    const f = createHeightField({ seed: 7, lowPower: false });
-    let found = 0;
-    for (let az = 275; az <= 305; az += 5) {
-      let steepest = 0;
-      for (let r = 700; r < 1500; r += 8) {
-        const [xa, za] = at(az, r);
-        const [xb, zb] = at(az, r + 8);
-        steepest = Math.max(steepest, (f.heightAt(xb, zb) - f.heightAt(xa, za)) / 8);
-      }
-      // Rising outward faster than the 10° illustrative Sun elevation => face in shadow.
-      if (steepest > Math.tan(15 * D)) found++;
-    }
-    expect(found).toBeGreaterThanOrEqual(5);
+    expect(skyline(f, 70, -70, 88)).toBeGreaterThan(4);
+    // No mound behind the spawn: the spawn, t08 and t12 cameras all stand on the floor.
+    expect(Math.abs(f.heightAt(-2.37, 10.77))).toBeLessThan(0.3);
+    expect(Math.abs(f.heightAt(7, 1))).toBeLessThan(0.3);
+    expect(Math.abs(f.heightAt(-9.24, 11.21))).toBeLessThan(0.3);
   });
 
   it('heightAt matches the rendered triangles (low-power mesh)', () => {

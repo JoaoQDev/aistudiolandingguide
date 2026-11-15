@@ -52,23 +52,24 @@ export function createLunarGround(opts: GroundOptions): GroundModule {
     uSunDirW: { value: new THREE.Vector3(0, Math.sin(0.1745), -Math.cos(0.1745)) },
     uDiffuseGain: { value: 0.97 },
     uPhotK: { value: 0.35 },
-    uSheenLobe: { value: 0.85 },
+    uSheenLobe: { value: 0.45 },
     uSheenFar: { value: new THREE.Vector2(0.5, 4) },
+    uSheenTail: { value: new THREE.Vector2(1.0, 1.35) },
     uSheenColumn: { value: 4.6 },
     uSheenFall: { value: 1.9 },
-    uSheenSharp: { value: new THREE.Vector2(11, 10) },
+    uSheenSharp: { value: new THREE.Vector2(26, 10) },
     uFill: { value: 0.15 },
     uShadeTint: { value: new THREE.Color(0.98, 0.96, 1.04) },
     uAmbientGain: { value: 1.0 },
     uCavityFloor: { value: 0.35 },
     uCavityEdge: { value: new THREE.Vector2(0.78, 0.95) },
     uCavityFade: { value: new THREE.Vector3(15, 40, 80) },
-    uIsoK: { value: new THREE.Vector2(0.45, 2.0) },
+    uIsoK: { value: new THREE.Vector2(0.45, 0.85) },
     uShadowStrength: { value: 0.32 },
     uShadowFade: { value: new THREE.Vector3(4, 14, 0.12) },
   };
   const scales = opts.lowPower ? SCALES.slice(1) : SCALES;
-  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v3' : 'lunar-regolith-v3');
+  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v4' : 'lunar-regolith-v4');
 
   const ground = new THREE.Mesh(geo, mat);
   ground.name = 'lunar-ground';

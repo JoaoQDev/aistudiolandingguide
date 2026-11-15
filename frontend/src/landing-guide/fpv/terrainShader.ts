@@ -54,6 +54,11 @@ export interface RegolithUniforms {
   uSheenLobe: { value: number };
   /** Far-field forward-scatter lobe: amplitude, power of cos(angle to the Sun). */
   uSheenFar: { value: THREE.Vector2 };
+  /**
+   * Broad forward-scatter tail (amplitude, power of cos(angle to the Sun)), faded with view
+   * depression: keeps the plain lifted 30–80° to either side of the Sun.
+   */
+  uSheenTail: { value: THREE.Vector2 };
   uSheenColumn: { value: number };
   /** Exponential fall-off of the glare wedge with view depression (sin). */
   uSheenFall: { value: number };
@@ -158,6 +163,7 @@ uniform float uDiffuseGain;
 uniform float uPhotK;
 uniform float uSheenLobe;
 uniform vec2 uSheenFar;
+uniform vec2 uSheenTail;
 uniform float uSheenColumn;
 uniform float uSheenFall;
 uniform vec2 uSheenSharp;
@@ -211,6 +217,8 @@ void RE_Direct_Lunar( const in IncidentLight directLight, const in vec3 geometry
   float g8 = g2 * g2;
   g8 *= g8;
   float lobe = uSheenLobe * c8 * mix( 0.45, 1.0, g2 ) + uSheenFar.x * pow( c, uSheenFar.y ) * g8;
+  // Broad tail: lifts the plain well to either side of the Sun (fades toward the feet).
+  lobe += uSheenTail.x * pow( c, uSheenTail.y ) * g2 * g2;
   // Glare wedge below the Sun (rough-surface glints elongated toward the viewer): narrow in
   // azimuth at every depression so views away from the Sun keep their crisp mid grey.
   vec3 rayH = ray + upV * sinDep;

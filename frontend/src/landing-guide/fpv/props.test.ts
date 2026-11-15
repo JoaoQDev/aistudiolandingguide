@@ -11,7 +11,9 @@ import {
   shipLocal,
   SUNWARD_CRATES,
   T01_DARK_ROW,
+  T47_CRATE,
 } from './propsLayout';
+import { createHeightField } from './terrainHeight';
 import { SHIP_HEIGHT, SHIP_LENGTH } from './propsShip';
 import { TANK_HEIGHT } from './propsTanks';
 import { WALK_RADIUS_M } from './types';
@@ -132,6 +134,8 @@ describe('createMoonbase', () => {
       for (const c of base.colliders) {
         if (Math.hypot(c.x - SUNWARD_CRATES.x, c.z - SUNWARD_CRATES.z) < 15) continue;
         if (Math.hypot(c.x - GREENHOUSE_CENTER.x, c.z - GREENHOUSE_CENTER.z) < GREENHOUSE_RADIUS + 5) continue;
+        // the lone valley crate is hidden by the terrain lip (see the occlusion test below)
+        if (Math.hypot(c.x - T47_CRATE.x, c.z - T47_CRATE.z) < 3) continue;
         const d = Math.hypot(c.x - pose.x, c.z - pose.z);
         let rel = Math.abs(bearing(pose.x, pose.z, c.x, c.z) - pose.yawDeg) % 360;
         if (rel > 180) rel = 360 - rel;
@@ -216,5 +220,24 @@ describe('createMoonbase', () => {
         if (along > 0) expect(across, 'front tank inside another tank\'s shadow').toBeGreaterThan(0.8);
       }
     base.dispose();
+  });
+
+  it('hides the lone valley crate (t47) from the base frames behind the terrain lip', () => {
+    for (const seed of [1, 4139966101]) {
+      const field = createHeightField({ seed, lowPower: false });
+      const top = field.heightAt(T47_CRATE.x, T47_CRATE.z) + 1.25 * T47_CRATE.scale;
+      for (const name of ['t01', 't05', 't12', 't21', 't30']) {
+        const p = REFERENCE_POSES[name];
+        const eye = field.heightAt(p.x, p.z) + 1.7;
+        const L = Math.hypot(T47_CRATE.x - p.x, T47_CRATE.z - p.z);
+        const toTop = (top - eye) / L;
+        let lip = -Infinity;
+        for (let i = 5; i < 195; i++) {
+          const t = i / 200;
+          lip = Math.max(lip, (field.heightAt(p.x + (T47_CRATE.x - p.x) * t, p.z + (T47_CRATE.z - p.z) * t) - eye) / (L * t));
+        }
+        expect(lip, `${name} sees the valley crate`).toBeGreaterThan(toTop);
+      }
+    }
   });
 });

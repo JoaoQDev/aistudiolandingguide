@@ -85,11 +85,16 @@ export const SUNWARD_SHIFT = { x: -4, z: 2 };
 export const SUNWARD_CRATES = { x: -24 + SUNWARD_SHIFT.x, z: 8 + SUNWARD_SHIFT.z };
 export const SUNWARD_TANKS = polar(226, 8.3, SUNWARD_CRATES.x, SUNWARD_CRATES.z);
 /**
- * Sunward valley viewpoint (t37, t39, t47: rolling horizon, no ship in view) and the lone dark crate
- * with a free top in the t47 foreground (≈ 3 m away, ≈ 41° left of the view axis).
+ * Viewpoint out in the low valley W/SW of the base, on the line through the greenhouse (t47; t37
+ * and t39 stand 5 m farther along that line, with the crate behind them): rolling
+ * horizon, ground rising on the left, no ship in view. Composed by the terrain (round 4).
  */
-export const T47_VIEW: SpawnPose = { x: -29.2, z: 5.48, yawDeg: 240.1, pitchDeg: 0.3 };
-export const T47_CRATE = { x: T47_VIEW.x - 0.99, z: T47_VIEW.z + 2.86, yawDeg: 196 };
+export const T47_VIEW: SpawnPose = { x: -73.2, z: 43.2, yawDeg: 240.1, pitchDeg: 0.3 };
+/**
+ * Lone dark crate with a free top filling the lower-left quarter of t47 (lid's far-right corner
+ * ≈ (580, 580) px, near-right corner ≈ (935, 880) px; reference ≈ (620, 610) / (940, 890)).
+ */
+export const T47_CRATE = { x: -73.96, z: 45.48, yawDeg: 28, scale: 1.3 };
 const sunwardPose = (x: number, z: number, yawDeg: number, pitchDeg: number): SpawnPose => ({
   x: Math.round((x + SUNWARD_SHIFT.x) * 100) / 100,
   z: Math.round((z + SUNWARD_SHIFT.z) * 100) / 100,
@@ -137,15 +142,17 @@ export const GREENHOUSE_RADIUS = 38;
 export const REFERENCE_POSES: Record<string, SpawnPose> = {
   t01: { ...MOONBASE_SPAWN },
   t05: { x: 2.7, z: -12.11, yawDeg: 294.1, pitchDeg: -2.4 },
-  t08: { x: 1.63, z: 8.77, yawDeg: 243.3, pitchDeg: -15.5 },
+  // From the floor (no raised mound): the reference camera stands a few metres higher, so the
+  // backlit group sits higher in frame than in the video — an accepted mismatch.
+  t08: sunwardPose(1.63, 8.77, 243.3, -15.5),
   t12: sunwardPose(-5.24, 9.21, 262.2, -2.1),
   t15: clusterPose(8.72, -9.89, 54.3, -0.7),
   t17: clusterPose(13.31, -12.0, 73.7, -3.9),
   't18.5': clusterPose(16.64, -13.15, 70.3, -1.0),
   t21: sunwardPose(-4.34, -3.35, 257.7, -2.6),
   t30: sunwardPose(-4.34, -3.35, 241.6, -4.5),
-  t37: { x: -34, z: 12, yawDeg: 243.15, pitchDeg: -4.95 },
-  t39: { x: -33, z: 9, yawDeg: 254.9, pitchDeg: -7.4 },
+  t37: { x: -77.5, z: 45.8, yawDeg: 243.15, pitchDeg: -4.95 },
+  t39: { x: -77.5, z: 45.8, yawDeg: 254.9, pitchDeg: -7.4 },
   't41.5': { ...T41_VIEW, pitchDeg: -9 },
   t43: { x: 70.5, z: -69.5, yawDeg: 41, pitchDeg: -8 },
   t47: { ...T47_VIEW },

@@ -10,6 +10,8 @@
  * Everything here is illustrative scenery: no real topography is implied.
  */
 
+import { landformAt, type LandformSample } from './terrainLandform';
+
 export interface TerrainLayout {
   /** Spacing of the innermost ring (m). */
   s0: number;
@@ -139,20 +141,12 @@ export function azKnots(values: readonly number[], azRad: number): number {
   return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t2 * t);
 }
 
-/** Smooth azimuthal window: 1 inside [c - hw, c + hw], fading to 0 over `fade` (all degrees). */
-function azWindow(azDeg: number, c: number, hw: number, fade: number): number {
-  let d = Math.abs(azDeg - c) % 360;
-  if (d > 180) d = 360 - d;
-  return 1 - smooth(hw, hw + fade, d);
-}
-
 // ---------------------------------------------------------------------------------------------
 // Large-scale layout (deterministic, so every site keeps the composition of the reference walk).
-// The base cluster sits on a calm floor; the ground rises gently (3–6°) to a low crest toward the
-// S/SW (the Sun/dome side for the default sky) and toward the E/NE, and dips toward the W/NW.
-// Beyond the W/NW depression a broken far ridge turns steep faces toward the base: with a low Sun
-// behind it those faces are self-shadowed (a dark band seen inside the depression), capped by
-// gentler sunlit benches that read as thin bright rim lines. Illustrative scenery only.
+// The base cluster sits on a calm floor with a low bowl rim around it. W/SW of the base the
+// ground falls into a broad valley toward the distant greenhouse; its western edge turns a dark
+// face toward the valley, hidden from the base by a low lip (terrainLandform.ts). Knolls add
+// local rises. Illustrative scenery only.
 // ---------------------------------------------------------------------------------------------
 
 /** Knots every 30° from North (clockwise): crest height (m), rise start and crest radius (m). */
@@ -161,48 +155,29 @@ export const BOWL_RISE_START = [118, 128, 121, 98, 84, 64, 56, 60, 80, 40, 46, 7
 export const BOWL_CREST = [262, 250, 196, 180, 176, 165, 152, 158, 178, 104, 110, 150];
 
 /**
- * Keep-flat pads (m) under prop clusters standing beyond the calm floor (the distant greenhouse
- * of propsLayout.ts): inside `r` the ground is levelled to the height at the pad centre, blending
- * back to the natural relief over PAD_BLEND metres. Harmless where nothing stands.
+ * Keep-flat pads (m) under props standing on sloping ground (the distant greenhouse, group E's
+ * crate and rover on the knoll's flank, the valley crate): inside `r` the ground is levelled to the
+ * height at the pad centre, blending back to the natural relief over `blend` metres.
  */
-export const BASE_PADS: ReadonlyArray<{ x: number; z: number; r: number }> = [
-  { x: -324.2, z: 198.1, r: 46 },
-];
-const PAD_BLEND = 30;
-
-interface FarRidge {
-  /** Sector centre / half width / fade (degrees). */
-  az: number;
-  hw: number;
-  fade: number;
-  /** Crest radius (m) and its azimuthal wander amplitude. */
+export interface Pad {
+  x: number;
+  z: number;
   r: number;
-  wander: number;
-  /** Face height (m), face width (m), bench width (m), bench height (m). */
-  face: number;
-  faceW: number;
-  bench: number;
-  benchH: number;
-  /**
-   * Basin in front of the face: depth (m) and the radii (m) over which the ground sinks to it.
-   * The basin floor stays below the sight line from the base, so the dark face is seen whole
-   * right above the near ground (no lit floor strip in between).
-   */
-  basin: number;
-  basin0: number;
-  basin1: number;
+  blend: number;
 }
-
-export const FAR_RIDGES: readonly FarRidge[] = [
-  // Right of the Sun (as seen from the base): broken ridge beyond the W/NW depression.
-  { az: 289, hw: 24, fade: 16, r: 1080, wander: 130, face: 17, faceW: 180, bench: 50, benchH: 6.5, basin: 22, basin0: 50, basin1: 650 },
+export const BASE_PADS: readonly Pad[] = [
+  { x: -324.2, z: 198.1, r: 46, blend: 30 },
+  // Single dark crate and rover 2 of group E (layout_round4, t41.5/t43); the row itself follows
+  // the knoll's natural slope.
+  { x: 73.7, z: -69.9, r: 3.5, blend: 6 },
+  { x: 78.9, z: -83.3, r: 3.6, blend: 6 },
+  // Lone dark crate in the valley (t47 foreground), on the valley's descent.
+  { x: -74, z: 45.5, r: 3.4, blend: 5 },
 ];
 
 /**
- * Local knolls (elliptical swells): a rise SW of the sunward group, so the ground climbs on the
- * left of the views from there toward the Sun while it stays low as seen end-on from the base,
- * and a broad rise NE/E beyond the second container row. Centre (m), semi-axes a (along
- * `axisAz`, degrees clockwise from North) and b (m), height h (m).
+ * Local knolls (elliptical swells h·(1 − q²)²). Centre (m), semi-axes a (along `axisAz`, degrees
+ * clockwise from North) and b (m), height h (m).
  */
 export interface Knoll {
   x: number;
@@ -213,9 +188,17 @@ export interface Knoll {
   h: number;
 }
 export const KNOLLS: readonly Knoll[] = [
-  { x: -59, z: 96, a: 68, b: 67, axisAz: 219, h: 5.5 },
+  // Rising ground on the left of the valley views toward the Sun (t37/t39/t47), facing ≈ North.
+  { x: -96, z: 104, a: 92, b: 62, axisAz: 100, h: 4.8 },
+  // Rise E of the second container row: the right skyline of t41.5/t43 climbs over it.
+  { x: 125, z: -75, a: 66, b: 70, axisAz: 90, h: 7 },
+  // Broad rise N/NE of the second row (skyline ahead of the t41.5/t43 views).
   { x: 106.5, z: -138.7, a: 73, b: 45.5, axisAz: 100, h: 5.2 },
 ];
+
+// No raised mound for the t08 view: a ~47° bump right behind the spawn hurt the walk more than
+// matching that single reference frame helped. t08 is framed from the floor instead.
+const ALL_KNOLLS: readonly Knoll[] = KNOLLS;
 
 // ---------------------------------------------------------------------------------------------
 // Height field
@@ -328,7 +311,7 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     let w = 0;
     for (let i = 0; i < BASE_PADS.length; i++) {
       const p = BASE_PADS[i];
-      const wi = 1 - smooth(p.r, p.r + PAD_BLEND, Math.hypot(x - p.x, z - p.z));
+      const wi = 1 - smooth(p.r, p.r + p.blend, Math.hypot(x - p.x, z - p.z));
       if (wi > w) {
         w = wi;
         padNearest = i;
@@ -337,14 +320,14 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     return w;
   };
 
-  const knollAxes = KNOLLS.map((k) => {
+  const knollAxes = ALL_KNOLLS.map((k) => {
     const a = (k.axisAz * Math.PI) / 180;
     return { ux: Math.sin(a), uz: -Math.cos(a) };
   });
   const knollsAt = (x: number, z: number): number => {
     let sum = 0;
-    for (let i = 0; i < KNOLLS.length; i++) {
-      const k = KNOLLS[i];
+    for (let i = 0; i < ALL_KNOLLS.length; i++) {
+      const k = ALL_KNOLLS[i];
       const dx = x - k.x;
       const dz = z - k.z;
       const u = (dx * knollAxes[i].ux + dz * knollAxes[i].uz) / k.a;
@@ -357,8 +340,10 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     return sum;
   };
 
-  /** Scratch: per far ridge, its sector weight then its crest radius (filled by `raw`). */
-  const ridgeCrest = new Float64Array(2 * FAR_RIDGES.length);
+  const lf: LandformSample = { h: 0, keep: 1 };
+  const rimWobble = (azR: number): number =>
+    0.8 * gnoise(Math.sin(azR) * 2.3 + 1.7, -Math.cos(azR) * 2.3 - 0.9, SL[2]) +
+    0.2 * gnoise(Math.sin(azR) * 9.5 - 4.1, -Math.cos(azR) * 9.5 + 2.6, SL[3]);
 
   const rawCore = (x: number, z: number): number => {
     const r2 = x * x + z * z;
@@ -367,14 +352,16 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     let azDeg = (Math.atan2(x, -z) * 180) / Math.PI;
     if (azDeg < 0) azDeg += 360;
     const azR = (azDeg * Math.PI) / 180;
-    const ux = r > 1e-6 ? x / r : 0;
-    const uz = r > 1e-6 ? z / r : -1;
     let h = 0;
 
     // --- Calm floor of the base and the low bowl rim around it -----------------------------
     const r0 = bowlRiseStart(x, z, azR, sc);
     h += bowlAt(x, z, r, azR, sc);
     h += knollsAt(x, z);
+    // Valley, wall and lip (terrainLandform.ts); `keep` calms the swells/hummocks there.
+    landformAt(r, azDeg, rimWobble, lf);
+    h += lf.h;
+    const keep = lf.keep;
     /** 0 on the calm floor (props), 1 beyond the start of the rim. */
     const rough = smooth(r0 - 8, r0 + 55, r);
 
@@ -388,7 +375,7 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     if (rough > 0) {
       // Rougher ground beyond the floor: lumpy swales, small soft craters and hummocks that
       // break the far plain into lit and shaded patches under the grazing Sun.
-      const fr = rough * (1 - smooth(1800, 2600, r));
+      const fr = rough * (1 - smooth(1800, 2600, r)) * (0.4 + 0.6 * keep);
       h +=
         fr *
         (0.55 * band(56, sc) * gnoise(x / 56 + 1.1, z / 56 + 7.9, S[13]) +
@@ -400,36 +387,9 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
         return smooth(rs + 5, rs + 45, rr) * (1 - smooth(900, 1400, rr)) * (1 - padWeight(px, pz));
       };
       h += featureLayer(x, z, 34, 0.3, 3, 9, 0.1, 0.17, S[6], false, roughGate);
-      h += featureLayer(x, z, 110, 0.4, 9, 26, 0.06, 0.11, S[7], false, roughGate);
-      h += featureLayer(x, z, 60, 0.45, 8, 22, 0.08, 0.16, S[16], true, roughGate);
+      h += (0.4 + 0.6 * keep) * featureLayer(x, z, 110, 0.4, 9, 26, 0.06, 0.11, S[7], false, roughGate);
+      h += keep * featureLayer(x, z, 60, 0.45, 8, 22, 0.08, 0.16, S[16], true, roughGate);
     }
-
-    // Far ridge crest radii (per ridge) and the depression floor in front of their faces, where
-    // the far swells/hummocks/hills are damped so the dark faces are seen whole from the base.
-    let floorK = 0;
-    let basinDrop = 0;
-    const crest = ridgeCrest;
-    if (r > 100) {
-      for (let k = 0; k < FAR_RIDGES.length; k++) {
-        const g = FAR_RIDGES[k];
-        const sector = azWindow(azDeg, g.az, g.hw, g.fade);
-        crest[k] = sector;
-        if (sector <= 0) continue;
-        const seedR = SL[2 + 2 * k];
-        const rc =
-          g.r +
-          g.wander * gnoise(ux * 2.3 + 1.7 * k, uz * 2.3 - 0.9 * k, seedR) +
-          0.13 * g.wander * gnoise(ux * 9.5 - 4.1, uz * 9.5 + 2.6, seedR + 2) +
-          0.3 * g.wander * band(500, sc) * gnoise(x / 500, z / 500, seedR + 1);
-        crest[FAR_RIDGES.length + k] = rc;
-        const f0 = rc - g.faceW;
-        const sink = sector * smooth(g.basin0, g.basin1, r);
-        floorK = Math.max(floorK, sink * (1 - smooth(f0 + 0.3 * g.faceW, rc, r)));
-        basinDrop = Math.max(basinDrop, g.basin * sink * (1 - smooth(f0, rc - g.bench, r)));
-      }
-    }
-    const keep = 1 - 0.85 * floorK;
-    h -= basinDrop;
 
     // Broad swells of the plain beyond the base.
     const fM = smooth(160, 700, r) * keep;
@@ -463,30 +423,6 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
         0.1 * band(212, sc) * gnoise(x / 212 + 7.7, z / 212 + 0.6, S[12]);
       const ridge = 1 - Math.abs(gnoise(x / 900 + 11.1, z / 900 - 3.3, S[19]));
       h += fF * amp * (0.6 * (b + 0.5) + 0.4 * ridge * ridge);
-    }
-
-    // Broken far ridges facing the base (dark faces + bright rim benches when looking sunward).
-    if (r > 500) {
-      for (let k = 0; k < FAR_RIDGES.length; k++) {
-        const g = FAR_RIDGES[k];
-        const sector = crest[k];
-        if (sector <= 0) continue;
-        const rc = crest[FAR_RIDGES.length + k];
-        const d = r - rc;
-        if (d < -g.faceW - 10 || d > 900) continue;
-        // Uneven height along the ridge (wavy crest line, never a flat-topped wall).
-        const sel =
-          0.8 +
-          0.2 * gnoise(ux * 3.4 - 2.2 * k, uz * 3.4 + 3.3, SL[3 + 2 * k]) +
-          0.12 * gnoise(ux * 11.3 + 1.9, uz * 11.3 - 7.4, SL[3 + 2 * k] + 3);
-        const amp = sector * sel;
-        const face = g.face * smooth(-g.faceW, -g.bench, d);
-        // Rim benches of uneven width/height: the bright crest line thickens, thins and breaks.
-        const benchVar = 0.25 + 1.3 * vnoise(ux * 15.0 + 3.3, uz * 15.0 - 1.1, SL[3 + 2 * k] + 5);
-        const bench = g.benchH * benchVar * smooth(-g.bench, 0.25 * g.bench, d);
-        const back = 0.6 * (g.face + g.benchH) * smooth(0.25 * g.bench, 0.25 * g.bench + 600, d);
-        h += amp * (face + bench - back) * (1 - smooth(4300, 5900, r));
-      }
     }
 
     // Lunar curvature drop (hides the mesh edge behind a natural horizon).

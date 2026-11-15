@@ -53,6 +53,8 @@ interface CrateGroup {
   tilt?: number;
   /** Extra height under level 0 (stacking on another family's crates). */
   baseLift?: number;
+  /** Uniform scale of the group's crates about its ground frame (default 1; offsets stay in metres). */
+  scale?: number;
 }
 
 interface TankGroup {
@@ -144,29 +146,33 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
   /** Places a crate group; returns the world matrices of its crates (in item order). */
   const addCrateGroup = (g: CrateGroup): THREE.Matrix4[] => {
     const spec = CRATE_SPECS[g.style];
-    const lift = crateLift(g.style);
+    const k = g.scale ?? 1;
+    const lift = crateLift(g.style) * k;
+    const w = spec.w * k;
+    const d = spec.d * k;
     let halfX = 0;
     let halfZ = 0;
     for (const [dx, dz, level] of g.items)
       if (level === 0) {
-        halfX = Math.max(halfX, Math.abs(dx) + spec.w / 2);
-        halfZ = Math.max(halfZ, Math.abs(dz) + spec.d / 2);
+        halfX = Math.max(halfX, Math.abs(dx) + w / 2);
+        halfZ = Math.max(halfZ, Math.abs(dz) + d / 2);
       }
-    const frame = groundFrame({ heightAt, x: g.x, z: g.z, yawDeg: g.yawDeg, halfX, halfZ, maxTilt: g.tilt ?? 0.08, sink: 0.06, nx: Math.ceil(halfX / 1.2) });
+    const frame = groundFrame({ heightAt, x: g.x, z: g.z, yawDeg: g.yawDeg, halfX, halfZ, maxTilt: g.tilt ?? 0.08, sink: 0.06 * k, nx: Math.ceil(halfX / 1.2) });
     const cos = Math.cos(yawForAzimuth(g.yawDeg));
     const sin = Math.sin(yawForAzimuth(g.yawDeg));
     const out: THREE.Matrix4[] = [];
     for (const [dx, dz, level, dyaw] of g.items) {
       rot.makeRotationY(dyaw * DEG);
       tmp.makeTranslation(dx, (g.baseLift ?? 0) + level * lift, dz).multiply(rot);
+      if (k !== 1) tmp.multiply(new THREE.Matrix4().makeScale(k, k, k));
       const m = frame.clone().multiply(tmp);
       crateMatrices[g.style].push(m);
       out.push(m);
       if (level === 0 && !g.baseLift) {
         const x = g.x + dx * cos + dz * sin;
         const z = g.z - dx * sin + dz * cos;
-        colliders.push({ x, z, radius: Math.hypot(spec.w, spec.d) * 0.46 });
-        contacts.push({ x, z, yawDeg: g.yawDeg - dyaw, halfX: spec.w / 2, halfZ: spec.d / 2, strength: 0.6, spread: 0.75, corner: 0.12 });
+        colliders.push({ x, z, radius: Math.hypot(w, d) * 0.46 });
+        contacts.push({ x, z, yawDeg: g.yawDeg - dyaw, halfX: w / 2, halfZ: d / 2, strength: 0.6, spread: 0.75 * k, corner: 0.12 * k });
       }
     }
     return out;
@@ -254,8 +260,10 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
     addTankGroup({ x: SUNWARD_TANKS.x, z: SUNWARD_TANKS.z, yawDeg: 164, items: [[0.9, 0], [0.5, 0.8], [-0.85, 0.05], [-1.25, 0.85]] });
   }
 
-  // (H) lone dark crate with a free top in the t47 foreground, out in the sunward valley.
-  addCrateGroup({ style: 'dark', x: T47_CRATE.x, z: T47_CRATE.z, yawDeg: T47_CRATE.yawDeg, items: [[0, 0, 0, 0]] });
+  // (H) lone dark crate with a free top in the t47 foreground, out in the sunward valley. The
+  // reference draws it larger than the base's crates (lid edge near eye level ≈ 2–5 m away), so it
+  // is scaled up; nothing of the same family stands next to it for comparison.
+  addCrateGroup({ style: 'dark', x: T47_CRATE.x, z: T47_CRATE.z, yawDeg: T47_CRATE.yawDeg, scale: T47_CRATE.scale, items: [[0, 0, 0, 0]] });
 
   // (G) greenhouse far beyond the sunward crest (t08, t12, t21, t30, t37–t47)
   const R = GREENHOUSE_RADIUS;
