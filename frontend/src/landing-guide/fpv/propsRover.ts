@@ -2,36 +2,50 @@ import * as THREE from 'three';
 import { beam, chamferBox, colorize, cylinderY, hull, mergeAll, V } from './propsGeometry';
 
 /**
- * Small 4-wheel rover/buggy (t01, t41.5, t43): four big chunky lugged wheels (Ø ≈ 45 % of the
- * overall length, almost touching front-to-back), a narrow open lower frame on swing arms and a
- * raised dark body box carrying lit white panels, a white instrument head and two thin antennas.
- * Vertex-coloured, one material. Local origin: ground centre; +X forward.
+ * Small 4-wheel rover/buggy (t01, t03–t04, t41.5): an open buggy, not a box. Four big chunky
+ * lugged wheels on wide swing arms (track ≈ 2.1 wheel diameters, wheelbase ≈ 1.9), a narrow
+ * central chassis, an open tubular frame (posts, side rails, diagonal braces, shocks) holding a
+ * thin dark wedge-shaped tray (top ≈ 1.45 wheel diameters above the ground, flanks sloping in
+ * toward the bottom) with a black/white hazard lip, small white corner panels, a light equipment
+ * box and two thin masts close together near the rear (≈ 0.3 wheel diameters above the tray).
+ * Everything below the tray is see-through between the wheels, as in the reference. Proportions
+ * measured on t04 / t41.5. Vertex-coloured, one material. Local origin: ground centre; +X forward.
  */
 
-export const ROVER_WHEEL_RADIUS = 0.55;
-export const ROVER_WHEEL_WIDTH = 0.42;
+export const ROVER_WHEEL_RADIUS = 0.46;
+export const ROVER_WHEEL_WIDTH = 0.38;
 /** Wheel centre offsets along X (wheelbase / 2) and Z (track / 2). */
-export const ROVER_WHEEL_X = 0.68;
-export const ROVER_WHEEL_Z = 0.76;
+export const ROVER_WHEEL_X = 0.86;
+export const ROVER_WHEEL_Z = 0.8;
 /** Half extents of the whole buggy footprint (wheels included). */
 export const ROVER_HALF_LENGTH = ROVER_WHEEL_X + ROVER_WHEEL_RADIUS;
-export const ROVER_HALF_WIDTH = ROVER_WHEEL_Z + ROVER_WHEEL_WIDTH / 2 + 0.07; // incl. hub caps
+export const ROVER_HALF_WIDTH = ROVER_WHEEL_Z + ROVER_WHEEL_WIDTH / 2 + 0.04; // incl. hub caps
 /** Height of the antenna tips. */
-export const ROVER_HEIGHT = 2.0;
+export const ROVER_HEIGHT = 1.74;
 /** Small beacon on the tip of the rear antenna. */
-export const ROVER_BEACON = V(-0.42, ROVER_HEIGHT + 0.012, 0.13);
-export const ROVER_BEACON_RADIUS = 0.022;
+export const ROVER_BEACON = V(-0.5, ROVER_HEIGHT + 0.012, 0.11);
+export const ROVER_BEACON_RADIUS = 0.02;
 
-const TYRE = 0x2a2a2e;
-const LUG = 0x505056;
-const HUB = 0x2f3034;
-const RIM = 0x8c8e93;
-const FRAME = 0x2a2b2f;
-const BODY = 0x303136;
-const PANEL = 0x45464c;
-const LIGHT = 0xe4e4e0;
-const DECK = 0xa9aaae;
-const ACCENT = 0x121214;
+const TYRE = 0x29292d;
+const LUG = 0x434349;
+const HUB = 0x34353a;
+const RIM = 0x9c9ea4;
+const FRAME = 0x55575d;
+const TUBE = 0x6c6e74;
+const CHASSIS = 0x2c2d31;
+const TRAY = 0x2f3035;
+const DECK = 0x3b3c42;
+const WHITE = 0xe2e2de;
+const STRIPE_DARK = 0x1d1d20;
+const SPRING = 0x8a8c92;
+
+/** Tray (upper body) shape: wedge, wider/longer at the top than at the bottom. */
+const TRAY_SHAPE = {
+  y0: 1.04,
+  y1: 1.34,
+  top: { x0: -0.92, x1: 0.96, z: 0.46 },
+  bottom: { x0: -0.7, x1: 0.72, z: 0.37 },
+} as const;
 
 function wheel(cx: number, cz: number, side: number, lowPower: boolean): THREE.BufferGeometry[] {
   const R = ROVER_WHEEL_RADIUS;
@@ -40,110 +54,166 @@ function wheel(cx: number, cz: number, side: number, lowPower: boolean): THREE.B
   // tyre: lathe around the axle with rounded shoulders (profile x = radius, y = across width)
   const prof: THREE.Vector2[] = [];
   const P = (r: number, y: number) => prof.push(new THREE.Vector2(r, y));
-  P(0.3, -W / 2);
-  P(R - 0.1, -W / 2);
-  P(R - 0.06, -W / 2 + 0.015);
-  P(R - 0.03, -W / 2 + 0.05);
-  P(R - 0.03, W / 2 - 0.05);
-  P(R - 0.06, W / 2 - 0.015);
-  P(R - 0.1, W / 2);
-  P(0.3, W / 2);
+  P(0.25, -W / 2);
+  P(R - 0.09, -W / 2);
+  P(R - 0.05, -W / 2 + 0.015);
+  P(R - 0.028, -W / 2 + 0.05);
+  P(R - 0.028, W / 2 - 0.05);
+  P(R - 0.05, W / 2 - 0.015);
+  P(R - 0.09, W / 2);
+  P(0.25, W / 2);
   const tyre = new THREE.LatheGeometry(prof, lowPower ? 12 : 22).toNonIndexed();
   tyre.deleteAttribute('uv');
   tyre.rotateX(Math.PI / 2);
   tyre.translate(cx, R, cz);
   parts.push(colorize(tyre, TYRE));
   // chunky staggered lugs (chevron tread)
-  const lugs = lowPower ? 10 : 16;
+  const lugs = lowPower ? 10 : 15;
   for (let i = 0; i < lugs; i++) {
     const a = (i / lugs) * Math.PI * 2;
     for (const half of [-1, 1]) {
       const z0 = half < 0 ? -W / 2 + 0.01 : 0.01;
       const z1 = half < 0 ? -0.01 : W / 2 - 0.01;
-      const g = chamferBox(-0.055, 0.055, R - 0.05, R + 0.004, z0, z1, 0.018);
+      const g = chamferBox(-0.05, 0.05, R - 0.045, R + 0.004, z0, z1, 0.016);
       g.rotateZ(a + (half > 0 ? Math.PI / lugs : 0));
       g.translate(cx, R, cz);
       parts.push(colorize(g, LUG));
     }
   }
-  // hub disc, light rim ring, cap (outer side only)
-  const hub = new THREE.CylinderGeometry(0.31, 0.31, W - 0.02, lowPower ? 10 : 16, 1).toNonIndexed();
+  // dark hub disc with a light rim ring on the outer face and a small cap
+  const hub = new THREE.CylinderGeometry(0.26, 0.26, W - 0.03, lowPower ? 10 : 16, 1).toNonIndexed();
   hub.deleteAttribute('uv');
   hub.rotateX(Math.PI / 2);
   hub.translate(cx, R, cz);
   parts.push(colorize(hub, HUB));
-  const ring = new THREE.CylinderGeometry(0.24, 0.24, 0.03, lowPower ? 10 : 16, 1).toNonIndexed();
+  const ring = new THREE.CylinderGeometry(0.235, 0.235, 0.025, lowPower ? 10 : 18, 1, true).toNonIndexed();
   ring.deleteAttribute('uv');
   ring.rotateX(Math.PI / 2);
-  ring.translate(cx, R, cz + side * (W / 2 - 0.0));
+  ring.translate(cx, R, cz + side * (W / 2 - 0.012));
   parts.push(colorize(ring, RIM));
-  const cap = new THREE.CylinderGeometry(0.09, 0.12, 0.08, 8, 1).toNonIndexed();
+  const cap = new THREE.CylinderGeometry(0.07, 0.1, 0.06, 8, 1).toNonIndexed();
   cap.deleteAttribute('uv');
   cap.rotateX((side * Math.PI) / 2);
-  cap.translate(cx, R, cz + side * (W / 2 + 0.03));
-  parts.push(colorize(cap, FRAME));
+  cap.translate(cx, R, cz + side * (W / 2 + 0.02));
+  parts.push(colorize(cap, RIM));
   return parts;
 }
+
+/** Thin tube between two points (square section, cheap). */
+const tube = (a: THREE.Vector3, b: THREE.Vector3, t: number, color: number) => colorize(beam(a, b, t), color);
 
 export function roverGeometry(lowPower: boolean): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
   const wx = ROVER_WHEEL_X;
   const wz = ROVER_WHEEL_Z;
   const R = ROVER_WHEEL_RADIUS;
+  const W = ROVER_WHEEL_WIDTH;
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) parts.push(...wheel(sx * wx, sz * wz, sz, lowPower));
 
-  // open lower frame: central spine + two axle cross-beams, swing arms and shocks to the hubs
-  parts.push(colorize(chamferBox(-0.78, 0.78, 0.5, 0.72, -0.2, 0.2, 0.03), FRAME));
-  for (const sx of [-1, 1]) {
-    parts.push(colorize(chamferBox(sx * wx - 0.07, sx * wx + 0.07, R - 0.06, R + 0.06, -0.24, 0.24, 0.02), FRAME));
-    for (const sz of [-1, 1]) {
-      parts.push(colorize(beam(V(sx * wx, R, sz * 0.2), V(sx * wx, R, sz * (wz - ROVER_WHEEL_WIDTH / 2 + 0.02)), 0.1, 0.12), FRAME));
-      // shock absorber from the hub carrier up to the body
-      parts.push(colorize(beam(V(sx * wx * 0.92, R + 0.05, sz * 0.36), V(sx * 0.42, 1.14, sz * 0.3), 0.06), HUB));
-      parts.push(colorize(beam(V(sx * wx * 0.9, R + 0.12, sz * 0.36), V(sx * 0.56, 0.98, sz * 0.32), 0.035), RIM));
-    }
-  }
-  // posts from the spine up to the raised body (see-through frame between the wheels)
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) parts.push(colorize(cylinderY(sx * 0.3, sz * 0.13, 0.7, 1.13, 0.035, 6), FRAME));
-  parts.push(colorize(chamferBox(-0.12, 0.12, 0.72, 1.12, -0.09, 0.09, 0.02), BODY));
+  // narrow central chassis (spine) with axle cross-members
+  parts.push(colorize(chamferBox(-0.62, 0.62, 0.5, 0.74, -0.17, 0.17, 0.035), CHASSIS));
+  for (const sx of [-1, 1]) parts.push(colorize(chamferBox(sx * wx - 0.08, sx * wx + 0.08, R - 0.05, R + 0.07, -0.24, 0.24, 0.02), CHASSIS));
 
-  // raised body box (dark) with a light deck plate and lit white panels front and rear
-  parts.push(colorize(chamferBox(-0.62, 0.6, 1.12, 1.52, -0.44, 0.44, 0.05), BODY));
-  parts.push(colorize(chamferBox(-0.6, 0.55, 1.52, 1.56, -0.4, 0.4, 0.015), DECK));
-  parts.push(colorize(chamferBox(-0.58, 0.58, 1.08, 1.13, -0.4, 0.4, 0.015), PANEL));
+  // suspension: upper/lower swing arms to an upright beside each wheel, shock with a spring
+  const armZ = wz - W / 2 - 0.05;
+  for (const sx of [-1, 1])
+    for (const sz of [-1, 1]) {
+      const hub = V(sx * wx, R, sz * armZ);
+      parts.push(colorize(chamferBox(sx * wx - 0.05, sx * wx + 0.05, R - 0.13, R + 0.13, sz * armZ - 0.04, sz * armZ + 0.04, 0.012), FRAME));
+      parts.push(tube(V(sx * (wx - 0.32), 0.52, sz * 0.17), V(sx * wx, R - 0.1, sz * armZ), 0.05, FRAME));
+      parts.push(tube(V(sx * (wx + 0.02), 0.56, sz * 0.2), V(sx * wx, R - 0.08, sz * armZ), 0.045, FRAME));
+      parts.push(tube(V(sx * (wx - 0.3), 0.7, sz * 0.17), V(sx * wx, R + 0.1, sz * armZ), 0.045, FRAME));
+      // axle stub into the hub
+      parts.push(tube(hub, V(sx * wx, R, sz * (wz - W / 2 + 0.02)), 0.07, CHASSIS));
+      // shock absorber: from the upright up to the tray underside, light spring around it
+      const s0 = V(sx * (wx - 0.06), R + 0.12, sz * (armZ - 0.02));
+      const s1 = V(sx * 0.5, TRAY_SHAPE.y0 + 0.01, sz * 0.3);
+      parts.push(tube(s0, s1, 0.04, CHASSIS));
+      const sm0 = s0.clone().lerp(s1, 0.15);
+      const sm1 = s0.clone().lerp(s1, 0.6);
+      parts.push(tube(sm0, sm1, 0.075, SPRING));
+    }
+
+  // open tubular frame from the chassis up to the tray: four posts, side rails, X braces
+  const yT = TRAY_SHAPE.y0;
+  for (const sx of [-1, 1])
+    for (const sz of [-1, 1]) {
+      parts.push(tube(V(sx * 0.5, 0.72, sz * 0.15), V(sx * 0.56, yT + 0.01, sz * 0.32), 0.05, TUBE));
+    }
   for (const sz of [-1, 1]) {
-    // side recess panels
-    parts.push(colorize(chamferBox(-0.45, 0.35, 1.2, 1.44, sz > 0 ? 0.43 : -0.455, sz > 0 ? 0.455 : -0.43, 0.01), PANEL));
-    for (const k of [0, 1]) {
-      const z0 = sz * (0.18 + k * 0.13);
-      // rear pair of white lit squares (t41.5 rear view)
-      parts.push(colorize(chamferBox(-0.635, -0.6, 1.27, 1.43, z0 - 0.055, z0 + 0.055, 0.008), LIGHT));
-      // front pair
-      parts.push(colorize(chamferBox(0.58, 0.615, 1.29, 1.41, z0 - 0.05, z0 + 0.05, 0.008), LIGHT));
+    // side rail at mid height and a diagonal brace (see-through side view)
+    parts.push(tube(V(-0.6, 0.92, sz * 0.27), V(0.62, 0.92, sz * 0.27), 0.04, TUBE));
+    parts.push(tube(V(-0.52, 0.74, sz * 0.18), V(0.1, yT + 0.01, sz * 0.32), 0.035, TUBE));
+    parts.push(tube(V(0.52, 0.74, sz * 0.18), V(-0.1, yT + 0.01, sz * 0.32), 0.035, TUBE));
+  }
+  for (const sx of [-1, 1]) parts.push(tube(V(sx * 0.56, yT - 0.02, -0.32), V(sx * 0.56, yT - 0.02, 0.32), 0.04, TUBE));
+  // front and rear bumper bars on short struts
+  for (const sx of [-1, 1]) {
+    const xb = sx * 0.86;
+    parts.push(tube(V(xb, 0.62, -0.34), V(xb, 0.62, 0.34), 0.05, TUBE));
+    for (const sz of [-1, 1]) parts.push(tube(V(sx * 0.6, 0.62, sz * 0.15), V(xb, 0.62, sz * 0.3), 0.04, TUBE));
+  }
+
+  // tray: thin dark wedge, flanks sloping in toward the bottom
+  const T = TRAY_SHAPE;
+  // flank point at height y, inset by `ins` along X and Z (top edge bevel, t05: rounded rim)
+  const fl = (y: number, ins: number) => {
+    const t = (y - T.y0) / (T.y1 - T.y0);
+    const x0 = T.bottom.x0 + t * (T.top.x0 - T.bottom.x0) + ins;
+    const x1 = T.bottom.x1 + t * (T.top.x1 - T.bottom.x1) - ins;
+    const z = T.bottom.z + t * (T.top.z - T.bottom.z) - ins;
+    return [-1, 1].flatMap((sz) => [V(x0, y, sz * z), V(x1, y, sz * z)]);
+  };
+  const bev = 0.05;
+  parts.push(colorize(hull([...fl(T.y0, 0.02), ...fl(T.y0 + 0.02, 0), ...fl(T.y1 - bev, 0), ...fl(T.y1 - bev * 0.35, bev * 0.45), ...fl(T.y1, bev)]), TRAY));
+  // deck plate on top, slightly inset
+  parts.push(colorize(chamferBox(T.top.x0 + 0.1, T.top.x1 - 0.12, T.y1 - 0.01, T.y1 + 0.016, -T.top.z + 0.09, T.top.z - 0.09, 0.01), DECK));
+
+  // hazard lip along the lower edge of both long flanks: dark band with slanted white bars
+  const lipY0 = T.y0 + 0.012;
+  const lipY1 = T.y0 + 0.075;
+  const zAt = (y: number) => T.bottom.z + ((y - T.y0) / (T.y1 - T.y0)) * (T.top.z - T.bottom.z);
+  for (const sz of [-1, 1]) {
+    const zl = sz * (zAt((lipY0 + lipY1) / 2) + 0.012);
+    parts.push(colorize(chamferBox(T.bottom.x0 + 0.06, T.bottom.x1 - 0.04, lipY0, lipY1, zl - 0.014, zl + 0.014), STRIPE_DARK));
+    const n = lowPower ? 6 : 11;
+    for (let k = 0; k < n; k++) {
+      const x = T.bottom.x0 + 0.12 + (k / (n - 1)) * (T.bottom.x1 - T.bottom.x0 - 0.26);
+      parts.push(tube(V(x - 0.028, lipY0 + 0.006, zl + sz * 0.012), V(x + 0.028, lipY1 - 0.006, zl + sz * 0.012), 0.032, WHITE));
     }
   }
-  parts.push(colorize(chamferBox(-0.64, -0.61, 1.2, 1.24, -0.38, 0.38), ACCENT));
-  // white instrument head on the front of the deck, sloped toward the front (lit in t01)
-  parts.push(
-    colorize(
-      hull([
-        ...[-0.32, 0.32].flatMap((z) => [V(0.12, 1.56, z), V(0.6, 1.56, z), V(0.12, 1.78, z * 0.92), V(0.42, 1.76, z * 0.92)]),
-      ]),
-      LIGHT,
-    ),
-  );
-  parts.push(colorize(chamferBox(0.43, 0.47, 1.6, 1.72, -0.24, 0.24, 0.01), ACCENT));
-  // camera head on a short post
-  parts.push(colorize(cylinderY(0.28, 0, 1.78, 1.88, 0.03, 6), FRAME));
-  parts.push(colorize(chamferBox(0.2, 0.38, 1.88, 1.97, -0.1, 0.1, 0.02), BODY));
-  parts.push(colorize(chamferBox(0.37, 0.39, 1.9, 1.95, -0.06, 0.06), LIGHT));
-  // rear equipment block and the two thin antennas
-  parts.push(colorize(chamferBox(-0.56, -0.2, 1.56, 1.66, -0.26, 0.26, 0.02), PANEL));
-  for (const sz of [-1, 1]) {
-    parts.push(colorize(cylinderY(-0.42, sz * 0.13, 1.6, 1.7, 0.025, 6), FRAME));
-    parts.push(colorize(cylinderY(-0.42, sz * 0.13, 1.66, ROVER_HEIGHT, 0.011, 5, 0.007), FRAME));
+
+  // white panels: one across the sloped front face (lit in t01), small ones on the rear corners
+  {
+    const f = 0.012;
+    const a = (y: number) => T.bottom.x1 + ((y - T.y0) / (T.y1 - T.y0)) * (T.top.x1 - T.bottom.x1);
+    const yA = T.y0 + 0.08;
+    const yB = T.y1 - 0.05;
+    const pts: THREE.Vector3[] = [];
+    for (const y of [yA, yB])
+      for (const sz of [-1, 1]) {
+        const zz = sz * (zAt(y) - 0.07);
+        pts.push(V(a(y) + 0.002, y, zz), V(a(y) + f, y + 0.004, zz));
+      }
+    parts.push(colorize(hull(pts), WHITE));
+    const b = (y: number) => T.bottom.x0 + ((y - T.y0) / (T.y1 - T.y0)) * (T.top.x0 - T.bottom.x0);
+    for (const sz of [-1, 1]) {
+      // rear corner panel wrapping the corner: a narrow plate on the rear slope at the outer edge
+      const p2: THREE.Vector3[] = [];
+      for (const y of [yA + 0.02, yB - 0.02])
+        for (const zz of [sz * (zAt(y) - 0.02), sz * (zAt(y) - 0.13)]) p2.push(V(b(y) - 0.002, y, zz), V(b(y) - f, y + 0.004, zz));
+      parts.push(colorize(hull(p2), WHITE));
+    }
   }
-  // front and rear bumper bars
-  for (const sx of [-1, 1]) parts.push(colorize(chamferBox(sx > 0 ? 0.74 : -0.84, sx > 0 ? 0.84 : -0.74, 0.55, 0.68, -0.32, 0.32, 0.02), FRAME));
+
+  // light equipment box near the front of the deck, low dark hatch behind it
+  parts.push(colorize(chamferBox(0.3, 0.66, T.y1 + 0.015, T.y1 + 0.11, -0.2, 0.2, 0.02), 0xb4b5ba));
+  parts.push(colorize(chamferBox(0.58, 0.665, T.y1 + 0.04, T.y1 + 0.09, -0.15, 0.15, 0.008), STRIPE_DARK));
+  parts.push(colorize(chamferBox(-0.62, -0.18, T.y1 + 0.015, T.y1 + 0.06, -0.24, 0.24, 0.015), CHASSIS));
+  // two thin masts close together near the rear (t41.5: ≈ 0.2 m apart)
+  for (const sz of [-1, 1]) {
+    parts.push(colorize(cylinderY(ROVER_BEACON.x, sz * ROVER_BEACON.z, T.y1 + 0.05, T.y1 + 0.12, 0.022, 6), CHASSIS));
+    parts.push(colorize(cylinderY(ROVER_BEACON.x, sz * ROVER_BEACON.z, T.y1 + 0.1, ROVER_HEIGHT, 0.01, 5, 0.007), FRAME));
+  }
   return mergeAll(parts, { uv: false, color: true });
 }

@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { colorize, mergeAll } from './propsGeometry';
+import { chamferBox, colorize, makeRng, mergeAll } from './propsGeometry';
+import { addHullFill } from './propsShipFill';
 
 /**
- * Greenhouse (t08/t12/t21/t30/t37–t47): a large clear glass hemisphere far beyond the base,
- * filled with a dark green canopy whose sunlit leaf clusters catch the light, with a thin crisp
- * bright rim on the sunward glass edge. It is placed a few hundred metres out (props.ts) so that,
+ * Greenhouse (t08/t12/t21/t30/t37–t47): a large clear glass hemisphere far beyond the base on a
+ * ring of light-grey crates, filled with a dark olive-green canopy whose leaf clusters catch the
+ * light on the sunward side, with a thin crisp bright rim on the sunward glass edge. It is placed a few hundred metres out (props.ts) so that,
  * as in the reference walk, it keeps the same bearing just left of the Sun from everywhere in the
  * base while nearby props shift. Local origin: ground centre; the glass base sits at `baseY`.
  */
@@ -93,16 +94,17 @@ float vn(vec3 x) {
 }
 void main() {
   vec3 N = normalize(vN);
-  // leaf clumps (a few metres) made of small lit leaf groups (about a metre), in local metres
-  float clump = vn(vL * 0.28) * 0.65 + vn(vL * 0.61 + 3.7) * 0.35;
-  float spots = vn(vL * 1.35 + 11.0);
-  float leaves = smoothstep(0.44, 0.62, clump) * smoothstep(0.5, 0.86, spots) * vLit;
+  // leaf clusters a few metres across (soft-edged blobs, no pixel speckle at range), in local metres
+  float clump = vn(vL * 0.22) * 0.6 + vn(vL * 0.47 + 3.7) * 0.4;
+  float spots = vn(vL * 0.85 + 11.0);
+  float leaves = smoothstep(0.5, 0.68, clump) * smoothstep(0.38, 0.72, spots) * vLit;
   vec3 sunH = normalize(vec3(uSun.x, 0.35, uSun.z));
   float d = dot(N, sunH);
   // light scattered through the glass and leaves: wrapped, never fully black
   float wrap = 0.45 + 0.55 * clamp(d * 0.5 + 0.5, 0.0, 1.0);
-  float sunSide = 0.3 + 0.9 * smoothstep(-0.4, 0.8, d);
-  vec3 col = vCol * wrap * (0.7 + 0.6 * spots) + uLeaf * leaves * sunSide * (0.6 + 0.6 * vLit);
+  // clusters catch the light mostly on the sunward half and on top
+  float sunSide = 0.15 + 1.0 * smoothstep(-0.3, 0.7, d) + 0.25 * clamp(N.y, 0.0, 1.0);
+  vec3 col = vCol * wrap * (0.75 + 0.5 * spots) + uLeaf * leaves * sunSide * (0.6 + 0.5 * vLit);
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -159,17 +161,34 @@ export function createGreenhouse(radius: number, baseY: number, lowPower: boolea
   const disposables: { dispose(): void }[] = [];
   const s = seed >>> 0;
 
-  // dark platform band (reads as the crate ring / plinth at this distance) + light ring
-  const platformGeo = mergeAll(
-    [
-      colorize(new THREE.CylinderGeometry(radius + 0.4, radius + 1.2, baseY + 3, 64, 1).translate(0, (baseY - 3) / 2, 0), 0x2e2e33),
-      colorize(new THREE.CylinderGeometry(radius - 0.2, radius - 0.2, 0.3, 64, 1).translate(0, baseY + 0.15, 0), 0x22201a),
-      colorize(new THREE.TorusGeometry(radius + 0.1, 0.22, 6, 96).rotateX(Math.PI / 2).translate(0, baseY + 0.1, 0), 0xb8b8bc),
-    ],
-    { uv: false, color: true },
-  );
-  const platformMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.05 });
+  // plinth: a ring of light-grey crates (two sizes, small gaps and jitter so they read as separate
+  // boxes), a dark floor disc under the canopy and a thin light sill ring under the glass
+  const rng = makeRng((s ^ 0x9e3779b9) >>> 0);
+  const parts: THREE.BufferGeometry[] = [];
+  const ringR = radius + 0.55;
+  const crateLen = 2.45;
+  const nCrates = Math.round((2 * Math.PI * ringR) / (crateLen + 0.12));
+  const tmpM = new THREE.Matrix4();
+  for (let i = 0; i < nCrates; i++) {
+    const a = ((i + 0.5) / nCrates) * Math.PI * 2;
+    const len = crateLen * (0.92 + 0.08 * rng());
+    const dep = 1.25 + 0.25 * rng();
+    const top = baseY + 0.02 + (rng() < 0.25 ? 0.18 : 0);
+    const shade = 0.66 + 0.1 * rng();
+    const tone = new THREE.Color(shade, shade, shade * 1.03);
+    const box = colorize(chamferBox(-len / 2, len / 2, -0.6, top, -dep / 2, dep / 2, 0.06), tone);
+    const jitter = (rng() - 0.5) * 0.12;
+    tmpM.makeRotationY(-a + Math.PI / 2 + (rng() - 0.5) * 0.05).setPosition(Math.cos(a) * (ringR + jitter), 0, Math.sin(a) * (ringR + jitter));
+    parts.push(box.applyMatrix4(tmpM));
+  }
+  parts.push(colorize(new THREE.CylinderGeometry(radius - 0.2, radius - 0.2, 0.3, 64, 1).translate(0, baseY + 0.15, 0), 0x22201a));
+  parts.push(colorize(new THREE.TorusGeometry(radius + 0.1, 0.22, 6, 96).rotateX(Math.PI / 2).translate(0, baseY + 0.1, 0), 0xc4c4c8));
+  const platformGeo = mergeAll(parts, { uv: false, color: true });
+  const platformMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.04 });
+  // backlit from the base, the crates still read light grey (≈ 60–110 sRGB) in the reference
+  addHullFill(platformMat, 0.22);
   const platform = new THREE.Mesh(platformGeo, platformMat);
+  platform.name = 'greenhouse-plinth';
   group.add(platform);
   disposables.push(platformGeo, platformMat);
 
@@ -216,7 +235,8 @@ export function createGreenhouse(radius: number, baseY: number, lowPower: boolea
     vertexColors: true,
     uniforms: {
       uSun: { value: new THREE.Vector3(0, 0.2, -1).normalize() },
-      uLeaf: { value: new THREE.Color(0xd4d28e) },
+      // dark olive-green leaf highlight (reference: canopy ≈ sRGB 10–20, lit clusters ≈ 35–55)
+      uLeaf: { value: new THREE.Color(0x4a5e2a) },
     },
   });
   const canopy = new THREE.Mesh(canopyGeo, canopyMat);

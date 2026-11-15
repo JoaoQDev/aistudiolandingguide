@@ -1,8 +1,18 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { CRATE_SPECS, containerLayout, crateGeometry, moduleLayout } from './propsCrates';
-import { ROVER_HALF_LENGTH, ROVER_HALF_WIDTH, ROVER_HEIGHT, ROVER_WHEEL_RADIUS, roverGeometry } from './propsRover';
-import { TANK_HEIGHT, TANK_MAST_TOP, TANK_RADIUS, tankGeometry, tankProfile } from './propsTanks';
+import { bindEnvironmentBoost, CRATE_BOUNCE_BOOST, createCrateMaterial } from './propsKitPaint';
+import {
+  ROVER_BEACON,
+  ROVER_HALF_LENGTH,
+  ROVER_HALF_WIDTH,
+  ROVER_HEIGHT,
+  ROVER_WHEEL_RADIUS,
+  ROVER_WHEEL_WIDTH,
+  ROVER_WHEEL_Z,
+  roverGeometry,
+} from './propsRover';
+import { TANK_HEIGHT, TANK_MAST_TOP, TANK_PROFILE, TANK_RADIUS, tankGeometry, tankProfile } from './propsTanks';
 import { crateAtlas, crateMaps, tankDetailMap, type CrateStyle } from './propsTextures';
 
 const STYLES: CrateStyle[] = ['hazard', 'row', 'dark'];
@@ -62,6 +72,48 @@ describe('props kit: crates', () => {
     g.dispose();
   });
 
+  it('has bevelled corner pillars standing proud of the faces and rising above the rim', () => {
+    for (const style of ['hazard', 'dark'] as const) {
+      const spec = CRATE_SPECS[style];
+      const L = containerLayout(spec, style);
+      const g = crateGeometry(spec);
+      const pos = g.getAttribute('position');
+      const nrm = g.getAttribute('normal');
+      const hx = spec.w / 2;
+      const hz = spec.d / 2;
+      let pillarFront = -Infinity;
+      let plateFront = -Infinity;
+      let pillarTop = -Infinity;
+      let midTop = -Infinity;
+      let chamfer = 0;
+      // per-triangle centroids (flat-shaded hulls: vertices sit only on the face corners)
+      for (let i = 0; i + 2 < pos.count; i += 3) {
+        const x = (pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3;
+        const y = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
+        const z = (pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3;
+        if (nrm.getZ(i) > 0.99) {
+          if (Math.abs(x) > hx - L.cb && Math.abs(x) < hx - L.cc) pillarFront = Math.max(pillarFront, z);
+          if (Math.abs(x) < L.m - 0.02 && y > L.win.y1 + 0.02 && y < spec.h - 0.02) plateFront = Math.max(plateFront, z);
+        }
+        if (nrm.getY(i) > 0.99) {
+          if (Math.abs(x) > hx - L.cb && Math.abs(z) > hz - L.cb) pillarTop = Math.max(pillarTop, y);
+          if (Math.abs(x) < L.m && Math.abs(z) > hz - L.pi - L.rimW + 0.01) midTop = Math.max(midTop, y);
+        }
+        // 45° bevel on the outer vertical edges of the pillars
+        if (Math.abs(Math.abs(nrm.getX(i)) - Math.SQRT1_2) < 0.02 && Math.abs(Math.abs(nrm.getZ(i)) - Math.SQRT1_2) < 0.02) chamfer++;
+      }
+      expect(pillarFront).toBeCloseTo(hz, 3);
+      expect(pillarFront - plateFront).toBeGreaterThan(0.045);
+      expect(pillarTop).toBeCloseTo(L.H, 3);
+      expect(pillarTop - midTop).toBeGreaterThan(0.03);
+      expect(chamfer).toBeGreaterThanOrEqual(4 * 2 * 3);
+      // the striped channel steps between the pillar face and the plates
+      expect(L.scD).toBeGreaterThan(0.01);
+      expect(L.scD).toBeLessThan(L.pi);
+      g.dispose();
+    }
+  });
+
   it('maps every vertex inside the atlas and stays cheap', () => {
     for (const style of STYLES) {
       const g = crateGeometry(CRATE_SPECS[style]);
@@ -81,25 +133,54 @@ describe('props kit: crates', () => {
     expect(crateAtlas('hazard', false, 1)).toBeNull();
     expect(crateMaps('dark', false, 1)).toBeNull();
     expect(tankDetailMap(false, 1)).toBeNull();
+    const { material, textures } = createCrateMaterial('dark', false, 1);
+    expect(material.map).toBeNull();
+    expect(material.color.getHex()).toBe(CRATE_SPECS.dark.fallbackColor);
+    expect(textures).toHaveLength(0);
+    material.dispose();
+  });
+
+  it('lets crates pick up more regolith bounce than the scene default (backlit faces, t12)', () => {
+    expect(CRATE_BOUNCE_BOOST.row).toBeGreaterThan(1.5);
+    expect(CRATE_BOUNCE_BOOST.dark).toBeLessThan(CRATE_BOUNCE_BOOST.row);
+    const material = new THREE.MeshStandardMaterial();
+    bindEnvironmentBoost(material, 2);
+    const scene = new THREE.Scene();
+    const call = () => material.onBeforeRender({} as THREE.WebGLRenderer, scene, new THREE.Camera(), new THREE.BufferGeometry(), new THREE.Mesh(), new THREE.Group());
+    call();
+    expect(material.envMap).toBeNull();
+    const env = new THREE.Texture();
+    scene.environment = env;
+    scene.environmentIntensity = 0.4;
+    call();
+    expect(material.envMap).toBe(env);
+    expect(material.envMapIntensity).toBeCloseTo(0.8, 6);
+    scene.environment = null;
+    call();
+    expect(material.envMap).toBeNull();
+    material.dispose();
+    env.dispose();
   });
 });
 
 describe('props kit: tanks', () => {
-  it('stands ≈ 1.8 m to the cap top, ≈ 0.85 m wide, with a thin mast above', () => {
+  it('stands ≈ 1.8 m to the cap top, ≈ 0.77 m wide (width / height ≈ 0.43), with a thin mast above', () => {
     const g = tankGeometry(false);
     const b = bbox(g);
     expect(b.min.y).toBeCloseTo(0, 3);
     expect(b.max.y).toBeCloseTo(TANK_MAST_TOP, 2);
-    expect(b.max.x - b.min.x).toBeGreaterThan(0.82);
-    expect(b.max.x - b.min.x).toBeLessThan(0.92);
+    expect(b.max.x - b.min.x).toBeGreaterThan(0.74);
+    expect(b.max.x - b.min.x).toBeLessThan(0.82);
     expect(TANK_HEIGHT).toBeGreaterThan(1.0 * EYE);
     expect(TANK_HEIGHT).toBeLessThan(1.12 * EYE);
-    expect(2 * TANK_RADIUS).toBeCloseTo(0.85, 2);
+    // reference t15–t18.5: body width / cap height 0.41–0.53
+    expect((2 * TANK_RADIUS) / TANK_HEIGHT).toBeGreaterThan(0.4);
+    expect((2 * TANK_RADIUS) / TANK_HEIGHT).toBeLessThan(0.47);
     expect(tris(g)).toBeLessThan(4000);
     g.dispose();
   });
 
-  it('has a collar, a truncated-cone cap with a flat top and a ribbed band', () => {
+  it('has a straight body, a barely inset ribbed band, a flush lip and a truncated-cone cap with a flat top', () => {
     const prof = tankProfile();
     const top = prof[prof.length - 1];
     expect(top.y).toBeCloseTo(TANK_HEIGHT, 5);
@@ -107,26 +188,59 @@ describe('props kit: tanks', () => {
     const rim = prof[prof.length - 2];
     expect(rim.y).toBeCloseTo(TANK_HEIGHT, 5);
     expect(rim.x).toBeLessThan(TANK_RADIUS * 0.55);
-    // collar overhangs the body; ribbed band is inset below it
-    const maxR = Math.max(...prof.filter((p) => p.y > 1.3).map((p) => p.x));
-    const minR = Math.min(...prof.filter((p) => p.y > 1.37 && p.y < 1.5).map((p) => p.x));
-    expect(maxR).toBeGreaterThan(TANK_RADIUS);
-    expect(minR).toBeLessThan(TANK_RADIUS * 0.9);
+    // the lip does not overhang the body noticeably (no heavy collar); the band is inset a little
+    const p = TANK_PROFILE;
+    const lipR = Math.max(...prof.filter((q) => q.y > p.bandTop && q.y <= p.collarTop).map((q) => q.x));
+    expect(lipR).toBeLessThan(TANK_RADIUS + 0.01);
+    const bandR = Math.min(...prof.filter((q) => q.y > p.bodyTop + 0.002 && q.y < p.bandTop).map((q) => q.x));
+    expect(bandR).toBeLessThan(TANK_RADIUS * 0.97);
+    expect(bandR).toBeGreaterThan(TANK_RADIUS * 0.88);
+    // the cap narrows monotonically from the lip to the flat top
+    const cap = prof.filter((q) => q.y >= p.collarTop && q.x > 0);
+    for (let i = 1; i < cap.length; i++) expect(cap[i].x).toBeLessThanOrEqual(cap[i - 1].x + 1e-9);
+    expect(p.capTop - p.collarTop).toBeGreaterThan(0.2);
   });
 });
 
 describe('props kit: rover', () => {
-  it('is a buggy with big wheels (Ø ≈ 45 % of its length) and two antennas', () => {
+  it('is a buggy with big wheels on a wide track and two thin masts', () => {
     const g = roverGeometry(false);
     const b = bbox(g);
     const length = b.max.x - b.min.x;
-    expect((2 * ROVER_WHEEL_RADIUS) / length).toBeGreaterThan(0.4);
-    expect((2 * ROVER_WHEEL_RADIUS) / length).toBeLessThan(0.5);
+    const D = 2 * ROVER_WHEEL_RADIUS;
+    expect(D / length).toBeGreaterThan(0.3);
+    expect(D / length).toBeLessThan(0.45);
+    // t41.5: track (outer) ≈ 2 wheel diameters, tyre width ≈ 0.4 diameter
+    expect((2 * ROVER_WHEEL_Z + ROVER_WHEEL_WIDTH) / D).toBeGreaterThan(1.8);
+    expect(ROVER_WHEEL_WIDTH / D).toBeGreaterThan(0.35);
     expect(b.max.x).toBeLessThanOrEqual(ROVER_HALF_LENGTH + 0.05);
     expect(Math.max(-b.min.z, b.max.z)).toBeLessThanOrEqual(ROVER_HALF_WIDTH + 0.05);
-    expect(b.max.y).toBeCloseTo(ROVER_HEIGHT, 1);
+    expect(b.max.y).toBeCloseTo(ROVER_HEIGHT, 2);
+    expect(ROVER_HEIGHT / D).toBeGreaterThan(1.7);
+    expect(ROVER_HEIGHT / D).toBeLessThan(2.1);
+    expect(Math.abs(ROVER_BEACON.z) * 2).toBeLessThan(0.3);
     expect(b.min.y).toBeGreaterThanOrEqual(-0.01);
     expect(tris(g)).toBeLessThan(15000);
+    g.dispose();
+  });
+
+  it('is open under the tray: no surface between the frame and the wheels at mid height', () => {
+    const g = roverGeometry(false);
+    const pos = g.getAttribute('position');
+    // probe box beside the chassis, between the side rail and the inner tyre walls, below the tray
+    const probe = new THREE.Box3(new THREE.Vector3(-0.35, 0.78, 0.36), new THREE.Vector3(0.35, 1.0, ROVER_WHEEL_Z - ROVER_WHEEL_WIDTH / 2 - 0.02));
+    const tri = new THREE.Triangle();
+    const box = new THREE.Box3();
+    let hits = 0;
+    for (const side of [1, -1]) {
+      const pr = side > 0 ? probe : new THREE.Box3(new THREE.Vector3(probe.min.x, probe.min.y, -probe.max.z), new THREE.Vector3(probe.max.x, probe.max.y, -probe.min.z));
+      for (let i = 0; i + 2 < pos.count; i += 3) {
+        tri.setFromAttributeAndIndices(pos, i, i + 1, i + 2);
+        box.setFromPoints([tri.a, tri.b, tri.c]);
+        if (box.intersectsBox(pr) && pr.intersectsTriangle(tri)) hits++;
+      }
+    }
+    expect(hits).toBe(0);
     g.dispose();
   });
 });

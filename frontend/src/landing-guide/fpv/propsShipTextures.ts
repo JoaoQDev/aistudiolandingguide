@@ -4,7 +4,7 @@ import { makeRng } from './propsGeometry';
 /**
  * Ship hull paint maps (canvas, no downloads): a near-white tiling multiplier (average ≈ 0.98, so
  * the material colour sets the lavender-grey paint) with only a few panel seams, faint large-scale
- * tone variation and light grime, plus a matching bump map for the seams. Returns null when a 2D
+ * tone variation (no grime smudges: the reference hull is clean), plus a matching bump map for the seams. Returns null when a 2D
  * canvas is unavailable (tests, workers) or in low-power mode.
  */
 
@@ -60,18 +60,6 @@ export function shipHullMaps(lowPower: boolean, seed: number): ShipHullMaps | nu
       c.fillRect(cols[i], rows[j], cols[i + 1] - cols[i], rows[j + 1] - rows[j]);
     }
 
-  // grime: soft blotches, slightly darker toward the bottom of each tile
-  for (let k = 0; k < 70; k++) {
-    const x = rand() * size;
-    const y = rand() * size;
-    const r = 20 + rand() * 90;
-    const g = c.createRadialGradient(x, y, 0, x, y, r);
-    const a = 0.025 + rand() * 0.05;
-    g.addColorStop(0, `rgba(60,58,66,${a})`);
-    g.addColorStop(1, 'rgba(60,58,66,0)');
-    c.fillStyle = g;
-    c.fillRect(x - r, y - r, 2 * r, 2 * r);
-  }
   // fine speckle
   const img = c.getImageData(0, 0, size, size);
   const d = img.data;

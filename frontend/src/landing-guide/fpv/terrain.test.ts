@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BASE_PADS, createHeightField } from './terrainHeight';
+import { BASE_PADS, KNOLLS, createHeightField } from './terrainHeight';
+import { buildDetailGLSL, type RegolithScale } from './terrainShader';
 import { generateRegolithTexture } from './terrainTexture';
 
 /** Height of the mesh triangle under (x, z) computed directly from the built mesh data. */
@@ -58,12 +59,17 @@ describe('lunar ground height field', () => {
     for (const seed of [7, 1234]) {
       const f = createHeightField({ seed, lowPower: false });
       expect(Math.abs(f.heightAt(0, 0))).toBeLessThan(0.05);
-      // Calm floor around the spawn and the prop clusters (spawn, ship, sunward group, NE row).
+      // Calm floor around the spawn and the prop clusters (round-3 layout: ship + groups A–C,
+      // group D + rover 1, sunward groups F/H, second row E + rover 2 around the t41.5 view).
       const discs: Array<[number, number, number]> = [
         [0, 0, 40],
-        [28, -19, 20],
-        [-27, 11, 12],
+        [-5.6, -36.4, 17],
+        [0.3, -25.4, 10],
+        [-7.2, -10.5, 6],
+        [-27, 10, 9],
         [72, -72, 28],
+        [84.7, -74.6, 9],
+        [78.9, -83.3, 4],
       ];
       for (const [cx, cz, R] of discs) {
         let min = Infinity;
@@ -79,7 +85,7 @@ describe('lunar ground height field', () => {
           }
         }
         expect(max - min).toBeLessThan(0.8);
-        expect(maxSlope).toBeLessThan(Math.tan(3 * D));
+        expect(maxSlope).toBeLessThan(Math.tan(2 * D));
       }
       // Keep-flat pads (distant greenhouse) are level.
       for (const p of BASE_PADS) {
@@ -92,16 +98,41 @@ describe('lunar ground height field', () => {
     }
   });
 
-  it('rises gently (3–6°) to a near crest on the Sun side and toward the E', () => {
-    const f = createHeightField({ seed: 7, lowPower: false });
-    for (const az of [180, 210, 270, 75]) {
-      const [x0, z0] = at(az, 40);
-      const [x1, z1] = at(az, az === 75 ? 190 : az === 270 ? 100 : 150);
-      const rise = f.heightAt(x1, z1) - f.heightAt(x0, z0);
-      const run = Math.hypot(x1 - x0, z1 - z0);
-      expect(rise).toBeGreaterThan(3);
-      expect(Math.atan(rise / run) / D).toBeLessThan(6);
+  /** Highest elevation angle (deg) of the terrain seen from (x, z) at eye height along `az`. */
+  const skyline = (f: ReturnType<typeof createHeightField>, x: number, z: number, az: number): number => {
+    const eye = f.heightAt(x, z) + 1.7;
+    let best = -90;
+    for (let d = 3; d < 6000; d *= 1.01) {
+      const [dx, dz] = at(az, d);
+      best = Math.max(best, Math.atan2(f.heightAt(x + dx, z + dz) - eye, d) / D);
     }
+    return best;
+  };
+
+  it('keeps the sunward skyline low from the base and sinks a basin before the W/NW ridge', () => {
+    for (const seed of [7, 1234]) {
+      const f = createHeightField({ seed, lowPower: false });
+      // From the base, toward the Sun side (W/NW), the horizon stays within ~1.5° of eye level.
+      for (let az = 240; az <= 310; az += 10) expect(skyline(f, -5, 5, az)).toBeLessThan(1.6);
+      // The ground sinks ≥ 10 m below the base floor in front of the ridge faces.
+      for (const az of [275, 290, 305]) {
+        const [x, z] = at(az, 600);
+        expect(f.heightAt(x, z)).toBeLessThan(-10);
+      }
+    }
+  });
+
+  it('adds gentle, sunlit-angle swells SW of the sunward group and NE beyond the second row', () => {
+    const f = createHeightField({ seed: 7, lowPower: false });
+    for (const k of KNOLLS) {
+      expect(f.heightAt(k.x, k.z) - f.heightAt(0, 0)).toBeGreaterThan(0.6 * k.h);
+      // Max slope of h(1-q^2)^2 is ~1.54 h / min(a, b): keep it under ~10° so the flanks stay lit.
+      expect(Math.atan((1.54 * k.h) / Math.min(k.a, k.b)) / D).toBeLessThan(10.5);
+    }
+    // Seen from the sunward group the ground rises on the left (S/SW) of the Sun...
+    expect(skyline(f, -34, 12, 200)).toBeGreaterThan(skyline(f, -34, 12, 245) + 1);
+    // ...and ahead of the t41.5 viewpoint the skyline climbs a few degrees.
+    expect(skyline(f, 70, -70, 42)).toBeGreaterThan(2.5);
   });
 
   it('turns steep, self-shadowed far ridge faces toward the base right of the Sun', () => {
@@ -149,6 +180,20 @@ describe('lunar ground height field', () => {
     expect(f.extent).toBeGreaterThan(3000);
     for (let i = 0; i < mesh.positions.length; i += 997) expect(Number.isFinite(mesh.positions[i])).toBe(true);
     console.info(`terrain mesh: ${mesh.triangleCount} tris in ${dt.toFixed(0)} ms`);
+  });
+});
+
+describe('regolith shader', () => {
+  it('samples every detail scale with an explicit, footprint-widened gradient', () => {
+    const scales: RegolithScale[] = [
+      { tile: 1.15, angle: 0.37, offset: [0.13, 0.71], slope: 0.6, cavity: 0.3, albedo: 0.1, fade: [8, 22] },
+      { tile: 37, angle: 4.13, offset: [0.8, 0.4], slope: 0.4, cavity: 0.3, albedo: 0.3, fade: null, damp: [4, 24, 1], tintFadeIn: [3, 15] },
+    ];
+    const glsl = buildDetailGLSL(scales);
+    expect(glsl.match(/textureGrad\(uDetail/g)?.length).toBe(2);
+    expect(glsl).toContain('dFdx(xz)');
+    expect(glsl).toContain('uIsoK');
+    expect(glsl).not.toMatch(/texture2D\(/);
   });
 });
 

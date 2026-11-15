@@ -13,9 +13,9 @@ import type { GroundModule, GroundOptions } from './types';
 
 const SCALES: RegolithScale[] = [
   { tile: 1.15, angle: 0.37, offset: [0.13, 0.71], slope: 0.62, cavity: 0.3, albedo: 0.12, fade: [8, 22] },
-  { tile: 6.3, angle: 1.91, offset: [0.57, 0.29], slope: 0.38, cavity: 0.35, albedo: 0.22, fade: [40, 130], damp: [4, 24, 0.4] },
-  // Coarse scale: weak at the feet (its pits would read as smudges there), full beyond ~20 m.
-  { tile: 37, angle: 4.13, offset: [0.83, 0.41], slope: 0.15, cavity: 0.3, albedo: 0.35, fade: [900, 2400], damp: [4, 24, 2.6], tintFadeIn: [6, 30] },
+  { tile: 6.3, angle: 1.91, offset: [0.57, 0.29], slope: 0.65, cavity: 0.5, albedo: 0.22, fade: [40, 130], damp: [3, 16, 0.22] },
+  // Coarse scale: chunky pits and clods at the feet, stronger relief toward the mid field.
+  { tile: 37, angle: 4.13, offset: [0.83, 0.41], slope: 0.4, cavity: 0.35, albedo: 0.35, fade: [900, 2400], damp: [4, 24, 1.0], tintFadeIn: [3, 15] },
   { tile: 230, angle: 2.71, offset: [0.21, 0.93], slope: 0.05, cavity: 0.2, albedo: 0.5, fade: null, damp: [25, 140, 4.4], tintFadeIn: [25, 110] },
 ];
 
@@ -53,18 +53,22 @@ export function createLunarGround(opts: GroundOptions): GroundModule {
     uDiffuseGain: { value: 0.97 },
     uPhotK: { value: 0.35 },
     uSheenLobe: { value: 0.85 },
+    uSheenFar: { value: new THREE.Vector2(0.5, 4) },
     uSheenColumn: { value: 4.6 },
     uSheenFall: { value: 1.9 },
     uSheenSharp: { value: new THREE.Vector2(11, 10) },
-    uFill: { value: 0.16 },
+    uFill: { value: 0.15 },
     uShadeTint: { value: new THREE.Color(0.98, 0.96, 1.04) },
     uAmbientGain: { value: 1.0 },
-    uCavityFloor: { value: 0.5 },
+    uCavityFloor: { value: 0.35 },
+    uCavityEdge: { value: new THREE.Vector2(0.78, 0.95) },
+    uCavityFade: { value: new THREE.Vector3(15, 40, 80) },
+    uIsoK: { value: new THREE.Vector2(0.45, 2.0) },
     uShadowStrength: { value: 0.32 },
-    uShadowFade: { value: new THREE.Vector3(8, 60, 0.35) },
+    uShadowFade: { value: new THREE.Vector3(4, 14, 0.12) },
   };
   const scales = opts.lowPower ? SCALES.slice(1) : SCALES;
-  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v2' : 'lunar-regolith-v2');
+  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v3' : 'lunar-regolith-v3');
 
   const ground = new THREE.Mesh(geo, mat);
   ground.name = 'lunar-ground';

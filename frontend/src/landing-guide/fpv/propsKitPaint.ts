@@ -31,6 +31,8 @@ interface Painter {
   c: Ctx;
   /** Bump canvas (mid grey = flat) or null. */
   b: Ctx | null;
+  /** Sheen mask canvas (black = none, white = dusty sheen) or null; same 1024-unit layout. */
+  s: Ctx | null;
   rand: () => number;
   /** Areas (design units) whose detail fades out in the coarse mip levels, with the fade colour. */
   fades: { x: number; y: number; w: number; h: number; color: string }[];
@@ -259,7 +261,7 @@ const DARK: ContainerPalette = {
   topInner: '#3e3c3b',
   slot: '#1a1817',
   base: '#2a2625',
-  lid: '#c4c2c4',
+  lid: '#efeef1',
   fade: '#57524b',
   dark: true,
 };
@@ -533,48 +535,88 @@ function paintContainer(p: Painter, L: ContainerLayout, P: ContainerPalette) {
       rect(c, A.tx(-L.handle.x), A.tz(zMid0), A.tx(L.handle.x) - A.tx(-L.handle.x), A.tz(zMid1) - A.tz(zMid0), P.dark ? '#bdb9b4' : '#d9d0cc');
       bumpRect(p, A.tx(-hxp), A.tz(za - 0.03), A.tx(hxp) - A.tx(-hxp), A.tz(zb + 0.03) - A.tz(za - 0.03), 70);
     }
-    // lid plate with chevron engraving (dark crates, t47)
+    // lid plate with chevron engraving (dark crates, t47): light grey, dust-dulled, with a bevelled
+    // frame and two long outlined bars meeting in a chevron, plus a smaller inner chevron
     if (L.lid) {
       const LX0 = A.tx(-L.lid.x);
       const LX1 = A.tx(L.lid.x);
       const LZ0 = A.tz(-L.lid.z);
       const LZ1 = A.tz(L.lid.z);
-      surface(p, LX0, LZ0, LX1 - LX0, LZ1 - LZ0, P.lid, '90,90,96', 0.06);
-      aoFrame(c, LX0, LZ0, LX1 - LX0, LZ1 - LZ0, '#5a5a5e', '#d8d8da', 3, 0.7);
-      const cy = (LZ0 + LZ1) / 2;
       const lw = LX1 - LX0;
       const lh = LZ1 - LZ0;
-      for (let k = 0; k < 3; k++) {
-        const x0 = LX0 + lw * (0.1 + k * 0.12);
-        const x1 = LX0 + lw * (0.62 + k * 0.12);
-        const half = lh * (0.36 - k * 0.09);
-        for (const [col, off, wd] of [
-          ['#5c5c60', 0, 3],
-          ['#e0e0e2', 2.5, 1.5],
+      surface(p, LX0, LZ0, lw, lh, P.lid, '120,118,124', 0.05);
+      aoFrame(c, LX0 + 1, LZ0 + 1, lw - 2, lh - 2, '#f2f2f4', '#6e6d72', 3.5, 0.8);
+      if (p.s) rect(p.s, LX0, LZ0, lw, lh, '#ffffff');
+      const cy = (LZ0 + LZ1) / 2;
+      const engrave = (pts: Pt[], width: number) => {
+        for (const [col, off, wd, a] of [
+          ['#5e5d63', 0, width, 0.9],
+          ['#f4f4f6', width * 0.55, width * 0.45, 0.7],
         ] as const) {
           c.save();
           c.strokeStyle = col;
           c.lineWidth = wd;
-          c.globalAlpha = 0.85;
+          c.globalAlpha = a;
+          c.lineJoin = 'miter';
           c.beginPath();
-          c.moveTo(x0, cy - half + off);
-          c.lineTo(x1, cy + off);
-          c.lineTo(x0, cy + half + off);
+          c.moveTo(pts[0][0] + off, pts[0][1] + off);
+          for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0] + off, pts[i][1] + off);
+          c.closePath();
           c.stroke();
           c.restore();
         }
         if (p.b) {
-          p.b.save();
-          p.b.strokeStyle = '#3c3c3c';
-          p.b.lineWidth = 4;
-          p.b.beginPath();
-          p.b.moveTo(x0, cy - half);
-          p.b.lineTo(x1, cy);
-          p.b.lineTo(x0, cy + half);
-          p.b.stroke();
-          p.b.restore();
+          // soft groove profile (wide shallow + narrow deep) so the bump does not alias into jaggies
+          for (const [col, wd] of [
+            ['#787878', width * 1.5],
+            ['#4c4c4c', width * 0.8],
+          ] as const) {
+            p.b.save();
+            p.b.strokeStyle = col;
+            p.b.lineWidth = wd;
+            p.b.lineJoin = 'round';
+            p.b.beginPath();
+            p.b.moveTo(pts[0][0], pts[0][1]);
+            for (let i = 1; i < pts.length; i++) p.b.lineTo(pts[i][0], pts[i][1]);
+            p.b.closePath();
+            p.b.stroke();
+            p.b.restore();
+          }
         }
+        if (p.s) {
+          p.s.save();
+          p.s.strokeStyle = '#6a6a6a';
+          p.s.lineWidth = width;
+          p.s.beginPath();
+          p.s.moveTo(pts[0][0], pts[0][1]);
+          for (let i = 1; i < pts.length; i++) p.s.lineTo(pts[i][0], pts[i][1]);
+          p.s.closePath();
+          p.s.stroke();
+          p.s.restore();
+        }
+      };
+      // two long bars (outlined parallelograms) converging toward +X
+      const tipX = LX0 + lw * 0.86;
+      const x0 = LX0 + lw * 0.1;
+      const t = lh * 0.13;
+      for (const sgn of [-1, 1]) {
+        const yOut = cy + sgn * lh * 0.36;
+        const yIn = cy + sgn * lh * 0.36 - sgn * t;
+        engrave([
+          [x0, yOut],
+          [tipX - lw * 0.08, cy + sgn * t * 0.5],
+          [tipX - lw * 0.08 - t * 1.6, cy + sgn * t * 0.5],
+          [x0 + t * 0.4, yIn],
+        ], 2.4);
       }
+      // smaller inner chevron
+      engrave([
+        [LX0 + lw * 0.3, cy - lh * 0.16],
+        [LX0 + lw * 0.62, cy],
+        [LX0 + lw * 0.3, cy + lh * 0.16],
+        [LX0 + lw * 0.36, cy],
+      ], 2.0);
+      chips(p, LX0, LZ0, lw, lh, 10, '#4a4a50', [1.5, 4], [0.3, 0.6]);
     }
     if (!P.dark) {
       chips(p, 512, 512, 512, 30, 30, CHIP, [2, 8]);
@@ -600,7 +642,7 @@ function paintModule(p: Painter, L: ModuleLayout) {
   const A = atlasPx(w, H, d);
   const WHITE = '#efeced';
   const GRAIN = '112,108,106';
-  const RECESS = '#8d8e93';
+  const RECESS = '#acadb2';
   const EDGE = '#5d5a59';
 
   // FRONT
@@ -736,6 +778,8 @@ function buildMips(base: HTMLCanvasElement, fades: Painter['fades']): HTMLCanvas
 export interface CrateMaps {
   map: THREE.Texture;
   bump: THREE.Texture | null;
+  /** Dusty-sheen mask (lid plates of the dark crates), or null for styles without one. */
+  sheen: THREE.Texture | null;
 }
 
 /** Albedo atlas (+ optional bump atlas) for one crate style (1024² or 512² in low-power mode). */
@@ -744,20 +788,26 @@ export function crateMaps(style: CrateStyle, lowPower: boolean, seed: number, wi
   const col = make2d(size, size);
   if (!col) return null;
   const bmp = withBump ? make2d(size, size) : null;
+  const wantSheen = style === 'dark' && !lowPower;
+  const shn = wantSheen ? make2d(size / 4, size / 4) : null;
   col.ctx.scale(size / 1024, size / 1024);
   if (bmp) {
     bmp.ctx.scale(size / 1024, size / 1024);
     rect(bmp.ctx, 0, 0, 1024, 1024, 'rgb(128,128,128)');
   }
+  if (shn) {
+    shn.ctx.scale(size / 4096, size / 4096);
+    rect(shn.ctx, 0, 0, 1024, 1024, '#000000');
+  }
   const fades: Painter['fades'] = [];
-  paint(style, { c: col.ctx, b: bmp?.ctx ?? null, rand: makeRng(seed), fades });
+  paint(style, { c: col.ctx, b: bmp?.ctx ?? null, s: shn?.ctx ?? null, rand: makeRng(seed), fades });
   const map = toTexture(col.canvas, true, false);
   const mips = fades.length ? buildMips(col.canvas, fades) : null;
   if (mips) {
     map.mipmaps = mips;
     map.generateMipmaps = false;
   }
-  return { map, bump: bmp ? toTexture(bmp.canvas, false, false) : null };
+  return { map, bump: bmp ? toTexture(bmp.canvas, false, false) : null, sheen: shn ? toTexture(shn.canvas, true, false) : null };
 }
 
 /** Albedo atlas texture for one crate style. */
@@ -766,8 +816,37 @@ export function crateAtlas(style: CrateStyle, lowPower: boolean, seed: number): 
 }
 
 /**
+ * How strongly each crate family picks up the regolith bounce (scene environment) relative to the
+ * scene's environmentIntensity. The shared environment is calibrated for the ship and tanks; crates
+ * stand right on the bright sunlit plain, and in the reference the backlit white row modules keep a
+ * mid-grey shaded face (t12 ≈ 50–70) where a plain bounce leaves ours near 26. The dark family gets
+ * a smaller lift so its faces in shade stay near-black (t01).
+ */
+export const CRATE_BOUNCE_BOOST: Record<CrateStyle, number> = { hazard: 1.15, row: 2.5, dark: 1.5 };
+
+/**
+ * Lets a standard material use the scene's environment at `boost` × scene.environmentIntensity
+ * (three.js otherwise forces the scene value onto materials without their own envMap). Tracks the
+ * scene each frame, so it follows an environment swap or removal (lowPower: none, no-op).
+ */
+export function bindEnvironmentBoost(material: THREE.MeshStandardMaterial, boost: number): void {
+  if (boost === 1) return;
+  material.onBeforeRender = (_renderer, scene) => {
+    const env = scene.environment;
+    if (material.envMap !== env) {
+      material.envMap = env;
+      material.needsUpdate = true;
+    }
+    if (env) material.envMapIntensity = scene.environmentIntensity * boost;
+  };
+}
+
+/**
  * Ready-made crate material: albedo atlas + bump atlas (engraving, seams, recess outlines,
  * scratches) with the spec's roughness/metalness; plain fallback colour without a canvas.
+ * The dark family is a MeshPhysicalMaterial whose light lid plates carry a dusty sheen
+ * (sheenColorMap mask): under the low Sun the regolith-dusted plate brightens at grazing
+ * incidence like the plain around it (t47 lid ≈ 140 in the reference), with no emission.
  * Returns the textures so the caller can dispose them.
  */
 export function createCrateMaterial(
@@ -777,14 +856,21 @@ export function createCrateMaterial(
 ): { material: THREE.MeshStandardMaterial; textures: THREE.Texture[] } {
   const spec = CRATE_SPECS[style];
   const maps = crateMaps(style, lowPower, seed);
-  const material = new THREE.MeshStandardMaterial({
+  const params: THREE.MeshStandardMaterialParameters = {
     color: maps ? 0xffffff : spec.fallbackColor,
     map: maps?.map ?? null,
     bumpMap: maps?.bump ?? null,
     bumpScale: 1.2,
     roughness: spec.roughness,
     metalness: spec.metalness,
-  });
-  const textures = maps ? [maps.map, ...(maps.bump ? [maps.bump] : [])] : [];
+  };
+  const material = maps?.sheen
+    ? new THREE.MeshPhysicalMaterial({ ...params, sheen: 1, sheenColor: 0xffffff, sheenColorMap: maps.sheen, sheenRoughness: CRATE_LID_SHEEN_ROUGHNESS })
+    : new THREE.MeshStandardMaterial(params);
+  bindEnvironmentBoost(material, CRATE_BOUNCE_BOOST[style]);
+  const textures = maps ? [maps.map, ...(maps.bump ? [maps.bump] : []), ...(maps.sheen ? [maps.sheen] : [])] : [];
   return { material, textures };
 }
+
+/** Sheen roughness of the dusty lid plates (lower = sheen concentrated at more grazing angles). */
+export const CRATE_LID_SHEEN_ROUGHNESS = 0.5;

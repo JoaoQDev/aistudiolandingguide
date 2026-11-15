@@ -2,21 +2,24 @@ import * as THREE from 'three';
 import { cylinderY, mergeAll } from './propsGeometry';
 
 /**
- * Vertical storage tank (t18.5, t41.5): plain body on a slightly wider foot ring, a ribbed
- * (threaded) band, an overhanging collar, a truncated-cone cap with a flat top, a small neck and
- * a thin antenna mast. Proportions measured on the reference frames relative to the 1.7 m eye
- * height: cap top ≈ 1.8 m, body ≈ 0.85 m wide. Local origin at the bottom centre.
+ * Vertical storage tank (t15–t18.5, t41.5): plain body on a slightly wider foot ring, a ribbed
+ * (threaded) band barely inset from the body, a thin lip, a truncated-cone cap with softly rounded
+ * shoulders and a flat top, a small neck and a thin antenna mast. Proportions measured at full
+ * resolution on t18.5 (front tank: body width 160 px, cap top 330 px above the foot ⇒ width ≈
+ * 0.49 × cap height; t17 tanks 0.41–0.46): body ≈ 77 % of the cap height, band ≈ 0.16 body
+ * widths, cap ≈ 0.3 body widths tall with a top ≈ 0.45 body widths across, mast ≈ 2.9 body
+ * widths above the foot. Local origin at the bottom centre.
  *
  * UVs: u runs around the tank, v = height / TANK_UV_HEIGHT, so `tankDetailMap` can paint the
  * foot notches, band and cap seams at their real heights.
  */
 
-/** Body radius (m). */
-export const TANK_RADIUS = 0.425;
+/** Body radius (m): 0.77 m wide, width / cap height ≈ 0.43 (slimmer than round 2's 0.47). */
+export const TANK_RADIUS = 0.385;
 /** Height of the flat cap top (m), mast excluded. */
 export const TANK_HEIGHT = 1.8;
 /** Top of the antenna mast (m). */
-export const TANK_MAST_TOP = 2.62;
+export const TANK_MAST_TOP = 2.6;
 /** v = 1 in the tank texture corresponds to this height (m). */
 export const TANK_UV_HEIGHT = 2.0;
 
@@ -29,12 +32,12 @@ export const TANK_PAINT = { color: 0xcbcad4, roughness: 0.42, metalness: 0.1 } a
 
 /** Profile heights (m) shared with the texture painter. */
 export const TANK_PROFILE = {
-  footTop: 0.075,
-  bodyTop: 1.36,
-  bandTop: 1.5,
-  collarTop: 1.565,
+  footTop: 0.07,
+  bodyTop: 1.385,
+  bandTop: 1.515,
+  collarTop: 1.54,
   capTop: TANK_HEIGHT,
-  capTopRadius: 0.185,
+  capTopRadius: 0.45 * TANK_RADIUS,
 } as const;
 
 export function tankProfile(): THREE.Vector2[] {
@@ -43,14 +46,14 @@ export function tankProfile(): THREE.Vector2[] {
   const pts: THREE.Vector2[] = [];
   const P = (x: number, y: number) => pts.push(new THREE.Vector2(x, y));
   P(0, 0);
-  P(R + 0.014, 0);
-  P(R + 0.014, p.footTop - 0.006);
+  P(R + 0.012, 0);
+  P(R + 0.012, p.footTop - 0.006);
   P(R + 0.004, p.footTop);
   P(R, p.footTop + 0.004);
-  P(R, p.bodyTop - 0.012);
-  P(R - 0.006, p.bodyTop);
-  // ribbed (threaded) band, inset to ~0.84 R
-  const rb = R * 0.84;
+  P(R, p.bodyTop - 0.01);
+  P(R - 0.005, p.bodyTop);
+  // ribbed (threaded) band, inset only ~6 % so the tank keeps a straight silhouette (t18.5)
+  const rb = R * 0.94;
   P(rb, p.bodyTop + 0.004);
   const ridges = 5;
   const span = p.bandTop - p.bodyTop - 0.012;
@@ -58,20 +61,30 @@ export function tankProfile(): THREE.Vector2[] {
     const y0 = p.bodyTop + 0.008 + (k / ridges) * span;
     const dy = span / ridges;
     P(rb, y0 + dy * 0.12);
-    P(rb + 0.014, y0 + dy * 0.35);
-    P(rb + 0.014, y0 + dy * 0.65);
+    P(rb + 0.011, y0 + dy * 0.35);
+    P(rb + 0.011, y0 + dy * 0.65);
     P(rb, y0 + dy * 0.88);
   }
   P(rb, p.bandTop);
-  // overhanging collar
-  P(R + 0.008, p.bandTop + 0.004);
-  P(R + 0.012, p.bandTop + 0.012);
-  P(R + 0.012, p.collarTop - 0.01);
-  P(R + 0.002, p.collarTop);
-  // truncated cone cap with a softened top edge and a flat top
-  P(p.capTopRadius + 0.012, p.capTop - 0.006);
-  P(p.capTopRadius, p.capTop);
-  P(0, p.capTop);
+  // thin lip, flush with the body (the cap base is no wider than the body in the reference)
+  P(R + 0.002, p.bandTop + 0.003);
+  P(R + 0.004, p.bandTop + 0.01);
+  P(R + 0.004, p.collarTop - 0.006);
+  P(R - 0.004, p.collarTop);
+  // cap: truncated cone with slightly convex flanks and a rounded top shoulder, flat top
+  const r0 = R - 0.012;
+  const r1 = p.capTopRadius;
+  const h0 = p.collarTop;
+  const h1 = p.capTop;
+  const steps = 6;
+  for (let k = 1; k <= steps; k++) {
+    const t = k / steps;
+    // convex flank: steeper near the lip, flatter toward the top (x shrinks as t^1.3)
+    P(r0 - (r0 - (r1 + 0.03)) * t ** 1.3, h0 + (h1 - 0.018 - h0) * t);
+  }
+  P(r1 + 0.012, h1 - 0.005);
+  P(r1, h1);
+  P(0, h1);
   return pts;
 }
 

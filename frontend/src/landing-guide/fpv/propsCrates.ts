@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { applyUV, beam, chamferBox, mergeAll, V, type UVMapper } from './propsGeometry';
+import { applyUV, beam, chamferBox, hull, mergeAll, V, type UVMapper } from './propsGeometry';
 import type { CrateStyle } from './propsTextures';
 
 /**
@@ -7,8 +7,9 @@ import type { CrateStyle } from './propsTextures';
  * texture (see propsKitPaint.ts for the atlas layout) so a whole family renders as one
  * InstancedMesh. Local origin: centre of the bottom face; long axis along +X.
  *
- * The relief is real geometry (bevelled corner blocks, recessed stripe channels, framed recessed
- * panels, raised top rim with handle bars, base skid). UVs are a box projection by face normal:
+ * The relief is real geometry (bevelled corner pillars standing proud of the faces and rising above
+ * the rim, stepped stripe channels, framed recessed panels, raised top rim and deck with long
+ * handle bars, base skid). UVs are a box projection by face normal:
  * every face samples the atlas at its own (x, y) / (z, y) / (x, z) position, so the painter
  * paints a flat 2D layout computed from the same `containerLayout` / `moduleLayout` numbers.
  */
@@ -22,7 +23,7 @@ export interface CrateSpec {
   kind?: 'container' | 'module';
   /** Kept for compatibility; unused by the current builders. */
   post?: { size: number; protrude: number };
-  /** Raised top rim: crates stack at `h + t`. */
+  /** Corner pillars rise `t` above the core top: crates stack at `h + t`. */
   lid?: { inset: number; t: number };
   /** Plain colour used when canvas textures are unavailable. */
   fallbackColor: number;
@@ -37,11 +38,11 @@ export interface CrateSpec {
  */
 export const CRATE_SPECS: Record<CrateStyle, CrateSpec> = {
   // dirty-white hazard containers next to the ship (t12–t18.5)
-  hazard: { kind: 'container', w: 2.35, h: 1.1, d: 1.3, chamfer: 0.05, lid: { inset: 0.42, t: 0.05 }, fallbackColor: 0xd2cac6, roughness: 0.6, metalness: 0.04 },
+  hazard: { kind: 'container', w: 2.35, h: 1.1, d: 1.3, chamfer: 0.05, lid: { inset: 0.42, t: 0.07 }, fallbackColor: 0xd2cac6, roughness: 0.6, metalness: 0.04 },
   // white modular containers with dark diagonal panels (t41.5/t43 row, greenhouse ring)
   row: { kind: 'module', w: 2.4, h: 1.05, d: 1.1, chamfer: 0.09, fallbackColor: 0xd6d5d2, roughness: 0.55, metalness: 0.04 },
   // charcoal crates of the same family with worn white edges and ochre stripes (t01, f_041)
-  dark: { kind: 'container', w: 2.4, h: 1.15, d: 1.35, chamfer: 0.05, lid: { inset: 0.42, t: 0.05 }, fallbackColor: 0x26272a, roughness: 0.5, metalness: 0.12 },
+  dark: { kind: 'container', w: 2.4, h: 1.13, d: 1.35, chamfer: 0.05, lid: { inset: 0.42, t: 0.07 }, fallbackColor: 0x26272a, roughness: 0.5, metalness: 0.12 },
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -51,17 +52,22 @@ export interface ContainerLayout {
   w: number;
   h: number;
   d: number;
-  /** Total height including the rim (texture t = y / H). */
+  /** Total height = top of the corner pillars (texture t = y / H). */
   H: number;
-  /** Corner block size on each face and its bevel. */
+  /** Corner pillar size on each face, the 45° bevel of its outer vertical edge, its top bevel. */
   cb: number;
   cc: number;
-  /** Width of the recessed stripe channel next to each corner block (front faces). */
+  ct: number;
+  /** Width of the stripe channel next to each pillar (front faces) and its depth behind the pillar face. */
   sc: number;
-  /** Plate plane inset from the outer envelope, and recess depth behind the plates. */
+  scD: number;
+  /** Plate plane inset from the outer envelope (= pillar protrusion), and recess depth behind the plates. */
   pi: number;
   rd: number;
+  /** Pillar rise above the core top (= spec lid.t), top of the raised rim, top of the inner deck. */
   rim: number;
+  rimTop: number;
+  deckTop: number;
   rimW: number;
   base: number;
   /** Front main face half width (between the stripe channels). */
@@ -77,17 +83,18 @@ export interface ContainerLayout {
   bar: number;
   /** Handle bar on the top, parallel to each long rim. */
   handle: { x: number; z0: number; z1: number };
-  /** Raised lid plate on top (dark crates). */
+  /** Raised lid plate on top (dark crates); `t` = its top above the core top. */
   lid: { x: number; z: number; t: number } | null;
 }
 
 export function containerLayout(spec: CrateSpec, style: CrateStyle): ContainerLayout {
   const { w, h, d } = spec;
-  const rim = spec.lid?.t ?? 0.05;
-  // measured on t18.5: corner block ≈ 12 % of the length, stripe channel ≈ 6 %, main face ≈ 60 %
+  const rim = spec.lid?.t ?? 0.07;
+  // measured on t18.5: corner pillar ≈ 12 % of the length, stripe channel ≈ 6 %, main face ≈ 60 %;
+  // the pillars stand proud of the face plates and rise above the rim (stacking posts)
   const cb = 0.27;
   const sc = 0.14;
-  const pi = 0.028;
+  const pi = 0.06;
   const base = 0.05;
   const m = w / 2 - cb - sc;
   const endM = d / 2 - cb;
@@ -99,11 +106,15 @@ export function containerLayout(spec: CrateSpec, style: CrateStyle): ContainerLa
     d,
     H: h + rim,
     cb,
-    cc: 0.07,
+    cc: 0.085,
+    ct: 0.024,
     sc,
+    scD: 0.026,
     pi,
     rd: 0.032,
     rim,
+    rimTop: h + rim * 0.45,
+    deckTop: h + rim * 0.28,
     rimW,
     base,
     m,
@@ -112,8 +123,9 @@ export function containerLayout(spec: CrateSpec, style: CrateStyle): ContainerLa
     endM,
     endWin: { z: endM - 0.05, y0: base + 0.1, y1: h - 0.11 },
     bar: 0.075,
-    handle: { x: Math.min(0.3, m * 0.4), z0: inner - 0.13, z1: inner - 0.09 },
-    lid: style === 'dark' ? { x: w / 2 - cb - 0.12, z: inner - 0.2, t: rim * 0.55 } : null,
+    // long handle bar in a wide dark slot along each long rim (t18.5 top)
+    handle: { x: Math.min(0.46, m * 0.6), z0: inner - 0.14, z1: inner - 0.095 },
+    lid: style === 'dark' ? { x: w / 2 - cb - 0.1, z: inner - 0.2, t: rim * 0.72 } : null,
   };
 }
 
@@ -201,8 +213,27 @@ function box(parts: THREE.BufferGeometry[], x0: number, x1: number, y0: number, 
   parts.push(chamferBox(Math.min(x0, x1), Math.max(x0, x1), y0, y1, Math.min(z0, z1), Math.max(z0, z1), c));
 }
 
+/**
+ * Corner pillar: square post of side `cb` at corner (sx, sz) with a 45° bevel `cc` on its outer
+ * vertical edge, small bevels at the foot and a `ct` bevel around the top (convex hull).
+ */
+function pillar(parts: THREE.BufferGeometry[], L: ContainerLayout, sx: number, sz: number) {
+  const hx = L.w / 2;
+  const hz = L.d / 2;
+  const ring = (y: number, outIn: number, inIn: number): THREE.Vector3[] => {
+    const xo = sx * (hx - outIn);
+    const zo = sz * (hz - outIn);
+    const xi = sx * (hx - L.cb + inIn);
+    const zi = sz * (hz - L.cb + inIn);
+    const c = L.cc + outIn * 0.4;
+    return [V(xi, y, zi), V(xo, y, zi), V(xo, y, zo - sz * c), V(xo - sx * c, y, zo), V(xi, y, zo)];
+  };
+  const cf = 0.012;
+  parts.push(hull([...ring(0, cf, 0), ...ring(cf, 0, 0), ...ring(L.H - L.ct, 0, 0), ...ring(L.H, L.ct, L.ct * 0.6)]));
+}
+
 function containerGeometry(spec: CrateSpec, L: ContainerLayout): THREE.BufferGeometry {
-  const { w, h, d, H, cb, cc, sc, pi, rd, rim, rimW, base, m, win, endM, endWin } = L;
+  const { w, h, d, cb, sc, scD, pi, rd, rimTop, deckTop, rimW, base, m, win, endM, endWin } = L;
   const parts: THREE.BufferGeometry[] = [];
   const hx = w / 2;
   const hz = d / 2;
@@ -211,12 +242,11 @@ function containerGeometry(spec: CrateSpec, L: ContainerLayout): THREE.BufferGeo
   const coreX = plateX - rd;
   const coreZ = plateZ - rd;
   // base skid (dark line under the body) and core
-  box(parts, -hx + 0.12, hx - 0.12, 0, base + 0.01, -hz + 0.12, hz - 0.12);
+  box(parts, -hx + 0.14, hx - 0.14, 0, base + 0.01, -hz + 0.14, hz - 0.14);
   box(parts, -coreX, coreX, base, h, -coreZ, coreZ);
-  // bevelled corner blocks, full height incl. rim
-  for (const sx of [-1, 1])
-    for (const sz of [-1, 1]) box(parts, sx * hx, sx * (hx - cb), 0, H, sz * hz, sz * (hz - cb), cc);
-  // front / back plates framing the lower recessed panel; the stripe channels stay recessed
+  // bevelled corner pillars, proud of every face plate and rising above the rim
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) pillar(parts, L, sx, sz);
+  // front / back plates framing the lower recessed panel
   const zb = coreZ - 0.01;
   for (const sz of [-1, 1]) {
     const z1 = sz * plateZ;
@@ -225,8 +255,8 @@ function containerGeometry(spec: CrateSpec, L: ContainerLayout): THREE.BufferGeo
     box(parts, win.x, m, base, h, z0, z1);
     box(parts, -win.x, win.x, base, win.y0, z0, z1);
     box(parts, -win.x, win.x, win.y1, h, z0, z1);
-    // stripe channel back wall sits a little proud of the core so its edge reads as a groove
-    for (const sx of [-1, 1]) box(parts, sx * m, sx * (hx - cb), base, h, z0, sz * (coreZ + rd * 0.35));
+    // striped channel: the pillar's inner step, between the pillar face and the plates
+    for (const sx of [-1, 1]) box(parts, sx * m, sx * (hx - cb + 0.004), base, rimTop, z0, sz * (hz - scD), 0.008);
   }
   // end plates around the recessed window + diagonal bar (the "N" panel)
   const xb = coreX - 0.01;
@@ -240,13 +270,14 @@ function containerGeometry(spec: CrateSpec, L: ContainerLayout): THREE.BufferGeo
     const xm = sx * (coreX + rd * 0.5);
     parts.push(beam(V(xm, endWin.y1 - 0.03, zTop), V(xm, endWin.y0 + 0.03, -zTop), rd, L.bar));
   }
-  // raised top rim between the corner blocks, flush with the plates
-  for (const sz of [-1, 1]) box(parts, -(hx - cb) - 0.01, hx - cb + 0.01, h - 0.012, H, sz * plateZ, sz * (plateZ - rimW), 0.016);
-  for (const sx of [-1, 1]) box(parts, sx * plateX, sx * (plateX - rimW), h - 0.012, H, -(hz - cb) - 0.01, hz - cb + 0.01, 0.016);
-  // handle bars inside the rim, over painted dark slots
-  for (const sz of [-1, 1]) box(parts, -L.handle.x, L.handle.x, h - 0.01, h + rim * 0.62, sz * L.handle.z0, sz * L.handle.z1, 0.012);
-  if (L.lid) box(parts, -L.lid.x, L.lid.x, h - 0.01, h + L.lid.t, -L.lid.z, L.lid.z, 0.014);
-  const mapper = crateMapper(w, H, d);
+  // raised top rim between the pillars, flush with the plates, and the inner deck
+  for (const sz of [-1, 1]) box(parts, -(hx - cb) - 0.01, hx - cb + 0.01, h - 0.012, rimTop, sz * plateZ, sz * (plateZ - rimW), 0.014);
+  for (const sx of [-1, 1]) box(parts, sx * plateX, sx * (plateX - rimW), h - 0.012, rimTop, -(hz - cb) - 0.01, hz - cb + 0.01, 0.014);
+  box(parts, -(plateX - rimW) - 0.005, plateX - rimW + 0.005, h - 0.01, deckTop, -(plateZ - rimW) - 0.005, plateZ - rimW + 0.005);
+  // long handle bars over painted dark slots
+  for (const sz of [-1, 1]) box(parts, -L.handle.x, L.handle.x, deckTop - 0.01, rimTop + 0.004, sz * L.handle.z0, sz * L.handle.z1, 0.012);
+  if (L.lid) box(parts, -L.lid.x, L.lid.x, deckTop - 0.01, h + L.lid.t, -L.lid.z, L.lid.z, 0.02);
+  const mapper = crateMapper(w, L.H, d);
   return mergeAll(
     parts.map((g) => applyUV(g, mapper)),
     { uv: true },

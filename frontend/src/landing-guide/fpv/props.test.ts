@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { createMoonbase } from './props';
-import { bearing, GREENHOUSE_CENTER, REFERENCE_POSES, SUNWARD_CRATES } from './propsLayout';
+import { bearing, GREENHOUSE_CENTER, GREENHOUSE_RADIUS, LAYOUT_SUN_AZIMUTH_DEG, REFERENCE_POSES, SUNWARD_CRATES } from './propsLayout';
 import { SHIP_HEIGHT, SHIP_LENGTH } from './propsShip';
 import { TANK_HEIGHT } from './propsTanks';
 import { WALK_RADIUS_M } from './types';
@@ -103,6 +103,33 @@ describe('createMoonbase', () => {
       expect(b).toBeGreaterThan(234);
       expect(b).toBeLessThan(242);
     }
+  });
+
+  it('lights the ship-side frames from ≈ 100° left of the view, as the reference tanks show', () => {
+    for (const name of ['t15', 't17', 't18.5']) {
+      const leftOfView = (((REFERENCE_POSES[name].yawDeg - LAYOUT_SUN_AZIMUTH_DEG) % 360) + 360) % 360;
+      expect(leftOfView, name).toBeGreaterThan(95);
+      expect(leftOfView, name).toBeLessThan(125);
+    }
+  });
+
+  it('keeps the sunward frames (t21, t30) clear of everything but the backlit group and the dome', () => {
+    // horizontal half field of view at 1920 × 940, vertical FOV 60°
+    const halfH = Math.atan(Math.tan((30 * Math.PI) / 180) * (1920 / 940)) * (180 / Math.PI);
+    const base = createMoonbase({ seed: 2, lowPower: true, heightAt: () => 0 });
+    for (const name of ['t21', 't30']) {
+      const pose = REFERENCE_POSES[name];
+      for (const c of base.colliders) {
+        if (Math.hypot(c.x - SUNWARD_CRATES.x, c.z - SUNWARD_CRATES.z) < 15) continue;
+        if (Math.hypot(c.x - GREENHOUSE_CENTER.x, c.z - GREENHOUSE_CENTER.z) < GREENHOUSE_RADIUS + 5) continue;
+        const d = Math.hypot(c.x - pose.x, c.z - pose.z);
+        let rel = Math.abs(bearing(pose.x, pose.z, c.x, c.z) - pose.yawDeg) % 360;
+        if (rel > 180) rel = 360 - rel;
+        const angularRadius = (Math.asin(Math.min(1, c.radius / d)) * 180) / Math.PI;
+        expect(rel - angularRadius, `${name} collider at ${c.x.toFixed(1)},${c.z.toFixed(1)}`).toBeGreaterThan(halfH);
+      }
+    }
+    base.dispose();
   });
 
   it('adds one draped contact-darkening mesh with per-vertex alpha', () => {

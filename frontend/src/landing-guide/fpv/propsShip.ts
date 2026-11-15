@@ -6,8 +6,8 @@ import { applyUV, chamferBox, hull, lerp, mergeAll, V, worldUV } from './propsGe
  * profile measured on the reference frame t15 (eye 1.7 m): a chamfered "head" block with a
  * chevron nose and a dark recessed lower side panel, a roof pod floating above the head on a
  * dark gap, a segmented spine, a mid hull with a slanted side groove, a solid segmented lower
- * skid on a front sled, and a long convex rear sweep ending in a blunt chamfered tip at the
- * ground.
+ * skid on a front sled, and a long rear sweep (rounded shoulder, then ≈ 35° down) ending in a
+ * small chamfered tip at the ground.
  *
  * Local frame: +X from nose (x = -L/2) to tail (x = +L/2), +Y up (y = 0 is nominal ground),
  * +Z / -Z are the two flanks. Parts that touch the ground extend `groundDrop` metres below 0.
@@ -30,14 +30,18 @@ const SPINE_TOP = 5.9;
 const SPINE_BOTTOM = 5.15;
 const SKID_TOP = 2.12;
 const SKID_BOTTOM = 1.25;
-const SWEEP_START = 16.0;
+const SWEEP_START = 15.0;
 const TIP_X = SHIP_LENGTH;
-const TIP_TOP = 1.46;
+const TIP_TOP = 0.42;
+const SWEEP_EXP = 1.5;
 
-/** Rear sweep: top height at x (gentle convex curve from SWEEP_START down to the tip). */
+/**
+ * Rear sweep: top height at x. Starts level at SWEEP_START (60 % of the length, a rounded shoulder)
+ * and steepens to ≈ 35° near the tip, as in the reference side view (t15).
+ */
 export function sweepTop(x: number): number {
   const t = THREE.MathUtils.clamp((x - SWEEP_START) / (TIP_X - SWEEP_START), 0, 1);
-  return SPINE_BOTTOM - (SPINE_BOTTOM - TIP_TOP) * t * t;
+  return SPINE_BOTTOM - (SPINE_BOTTOM - TIP_TOP) * Math.pow(t, SWEEP_EXP);
 }
 
 interface Sec {
@@ -220,7 +224,8 @@ export function buildShipGeometry(groundDrop: number): ShipGeometry {
   // ---------------------------------------------------------------- roof pod (floats on a dark gap)
   // pod side faces read darker than the head in the reference (top chamfer light, side mid grey)
   H.push(tone(block({ x0: 0.1, x1: 5.9, yB: POD_BOTTOM, yT: POD_TOP, hw: 2.35, cT: 0.3, cB: 0.36, e0: 0.16 }), 0.8));
-  H.push(tone(block({ x0: 5.95, x1: 9.3, yB: POD_BOTTOM + 0.12, yT: POD_TOP - 0.2, yB1: 6.5, yT1: 7.05, hw: 2.25, hw1: 2.0, cT: 0.28, cB: 0.3, e0: 0.12, e1: 0.3 }), 0.76));
+  // second pod segment: same section, squared chamfered end (no tapering tip)
+  H.push(tone(block({ x0: 5.95, x1: 9.3, yB: POD_BOTTOM + 0.12, yT: POD_TOP - 0.12, hw: 2.25, cT: 0.28, cB: 0.3, e0: 0.12, e1: 0.14 }), 0.76));
   S.push(block({ x0: 3.3, x1: 4.6, yB: HEAD_TOP - 0.2, yT: POD_BOTTOM + 0.05, hw: 1.3, c: 0.08 }));
   S.push(block({ x0: 7.0, x1: 7.9, yB: SPINE_TOP - 0.05, yT: POD_BOTTOM + 0.1, hw: 1.15, c: 0.08 }));
 
@@ -233,10 +238,10 @@ export function buildShipGeometry(groundDrop: number): ShipGeometry {
 
   // ---------------------------------------------------------------- spine (segmented with collars)
   const spineSegs: [number, number, number, number][] = [
-    [4.1, 7.4, 0.3, 0],
+    [4.1, 7.4, 0.14, 0],
     [7.8, 10.6, 0, 0],
     [11.0, 13.4, 0, 0],
-    [13.8, 15.25, 0, 0.42],
+    [13.8, 15.25, 0, 0.16],
   ];
   for (const [x0, x1, e0, e1] of spineSegs) H.push(block({ x0, x1, yB: SPINE_BOTTOM, yT: SPINE_TOP, hw: 3.0, cT: 0.22, cB: 0.14, e0, e1 }));
   for (const x0 of [7.42, 10.62, 13.42]) H.push(block({ x0, x1: x0 + 0.36, yB: SPINE_BOTTOM - 0.06, yT: SPINE_TOP + 0.07, hw: 3.12, cT: 0.2, cB: 0.12 }));
@@ -313,26 +318,29 @@ export function buildShipGeometry(groundDrop: number): ShipGeometry {
   flankPlates(S, 15.0, 15.08, 0.15, 1.75, 2.99, 3.02, 0);
 
   // ---------------------------------------------------------------- rear sweep down to the ground
-  const xs = [16.0, 17.0, 18.2, 19.4, 20.5, 21.5, 22.4, 23.2, 23.9, 24.45];
+  const xs = [15.0, 16.0, 17.1, 18.2, 19.3, 20.3, 21.3, 22.2, 23.0, 23.7, 24.3];
   const secs: Sec[] = xs.map((x) => {
     const t = (x - SWEEP_START) / (TIP_X - SWEEP_START);
-    return { x, yB: x < 16.5 ? SKID_TOP : G, yT: sweepTop(x), hw: lerp(2.92, 2.62, t), cT: lerp(0.55, 0.9, t), cTy: lerp(0.3, 0.42, t), cB: 0 };
+    // the top chamfer shrinks toward the tip so the thin end keeps a flat top
+    const yT = sweepTop(x);
+    return { x, yB: x < 16.5 ? SKID_TOP : G, yT, hw: lerp(2.92, 2.6, t), cT: lerp(0.55, 0.5, t), cTy: Math.min(lerp(0.3, 0.24, t), (yT - G) * 0.3), cB: 0 };
   });
   for (let i = 0; i < secs.length - 1; i++) H.push(loft([secs[i], { ...secs[i + 1], x: secs[i + 1].x - 0.03 }]));
-  // blunt chamfered tip: face leaning forward from the top edge down to the ground
+  // small chamfered tip: a short face leaning back from the top edge into the ground
   {
     const s = secs[secs.length - 1];
     const pts = ring(s);
     for (const sz of [-1, 1]) {
-      pts.push(V(TIP_X, TIP_TOP, sz * 2.0), V(TIP_X - 0.12, TIP_TOP - 0.16, sz * 2.35));
-      pts.push(V(TIP_X - 0.62, 0.05, sz * 2.35), V(TIP_X - 0.62 + 0.25 * G, G, sz * 2.35));
+      pts.push(V(TIP_X, TIP_TOP, sz * 2.1), V(TIP_X - 0.08, TIP_TOP - 0.1, sz * 2.4));
+      pts.push(V(TIP_X - 0.3, 0.0, sz * 2.4), V(TIP_X - 0.3 + 0.35 * G, G, sz * 2.4));
     }
     H.push(hull(pts));
   }
   // two rib seams on the rear flanks
-  for (const xr of [18.9, 21.9]) {
+  for (const xr of [18.4, 21.4]) {
     const top = sweepTop(xr) - 0.4;
-    flankPlates(S, xr, xr + 0.09, 0.05, top, 2.86, 2.92, 0);
+    const hw = lerp(2.92, 2.6, (xr - SWEEP_START) / (TIP_X - SWEEP_START));
+    flankPlates(S, xr, xr + 0.09, 0.05, top, hw - 0.03, hw + 0.04, 0);
   }
 
   // shift so the hull is centred on the origin along X

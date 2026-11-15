@@ -4,12 +4,14 @@ import { createContactShadows, type ContactFootprint } from './propsDecalShadows
 import { createGreenhouse } from './propsDome';
 import { groundFrame, makeRng, yawForAzimuth } from './propsGeometry';
 import {
+  clusterPolar,
   GREENHOUSE_CENTER,
   GREENHOUSE_RADIUS,
   MOONBASE_SPAWN,
   polar,
   SHIP_AXIS_AZ,
   SHIP_CENTER,
+  SHIP_CLUSTER_TURN_DEG,
   shipLocal,
   SUNWARD_CRATES,
   SUNWARD_LONE_CRATE,
@@ -18,9 +20,10 @@ import {
 } from './propsLayout';
 import { ROVER_BEACON, ROVER_BEACON_RADIUS, ROVER_HALF_LENGTH, ROVER_HALF_WIDTH, roverGeometry } from './propsRover';
 import { buildShipGeometry, SHIP_HALF_WIDTH, SHIP_LENGTH } from './propsShip';
+import { addHullFill } from './propsShipFill';
 import { shipHullMaps } from './propsShipTextures';
 import { TANK_PAINT, TANK_RADIUS, tankGeometry } from './propsTanks';
-import { createCrateMaterial } from './propsKitPaint';
+import { bindEnvironmentBoost, createCrateMaterial } from './propsKitPaint';
 import { tankDetailMap, type CrateStyle } from './propsTextures';
 import type { CircleCollider, FrameContext, PropsModule, PropsOptions } from './types';
 
@@ -56,6 +59,15 @@ interface TankGroup {
   yawDeg: number;
   items: [dx: number, dz: number][];
 }
+
+/** Strength of the hull's ambient fill (fraction of the Sun's irradiance, see propsShipFill.ts). */
+const SHIP_HULL_FILL = 0.8;
+/**
+ * Extra clockwise turn of the containers beside the ship's flank (groups B, C): their long faces
+ * look toward the camera in t15–t18.5 and, as in the reference, are lit while their right ends
+ * fall into shade.
+ */
+const FLANK_CRATE_TURN = 55;
 
 const lidT = (style: CrateStyle) => CRATE_SPECS[style].lid?.t ?? 0;
 const crateLift = (style: CrateStyle) => CRATE_SPECS[style].h + lidT(style) + 0.005;
@@ -95,8 +107,11 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
     roughness: 0.78,
     metalness: 0.04,
   });
+  // the reference hull reads lit on every face it shows (see propsShipFill.ts)
+  addHullFill(hullMat, SHIP_HULL_FILL);
   const darkMat = new THREE.MeshStandardMaterial({ color: 0x4a464b, roughness: 0.7, metalness: 0.08 });
   const shadeMat = new THREE.MeshStandardMaterial({ color: 0x4e4a54, roughness: 0.85, metalness: 0.04 });
+  addHullFill(shadeMat, SHIP_HULL_FILL * 0.6);
   const shipHull = new THREE.Mesh(ship.hull, hullMat);
   const shipDark = new THREE.Mesh(ship.dark, darkMat);
   const shipShade = new THREE.Mesh(ship.shade, shadeMat);
@@ -168,40 +183,38 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
     const sin = Math.sin(yawForAzimuth(g.yawDeg));
     for (const [dx, dz] of g.items) addTank(g.x + dx * cos + dz * sin, g.z - dx * sin + dz * cos, g.yawDeg + rand() * 360);
   };
+  /** Tank standing on a container's recessed inner deck (core top + 0.28 · rim rise, as the kit builds it). */
   const tankOnCrate = (crate: THREE.Matrix4, style: CrateStyle, dx: number) => {
-    tankMatrices.push(crate.clone().multiply(new THREE.Matrix4().makeTranslation(dx, CRATE_SPECS[style].h + lidT(style), 0)));
+    const deck = CRATE_SPECS[style].h + 0.28 * (CRATE_SPECS[style].lid?.t ?? 0.07);
+    tankMatrices.push(crate.clone().multiply(new THREE.Matrix4().makeTranslation(dx, deck, 0)));
   };
 
-  // (A) white hazard containers at the foot of the ship's head, sunlit side (t01, t05): two columns
-  // of containers end to end pointing away from the flank, white ends toward the spawn/Sun, their
-  // long faces in shade.
+  // (A) white hazard containers on the shaded (-Z) side of the ship's head: two side by side and
+  // one on top, parallel to the hull with their ends toward the nose/Sun. Out of every reference
+  // frame (the reference shows nothing left of the ship in t15/t17), seen only when walking round.
   {
-    const a = shipLocal(-10.4, 6.7);
-    addCrateGroup({
-      style: 'hazard',
-      x: a.x,
-      z: a.z,
-      yawDeg: SHIP_AXIS_AZ + 90,
-      items: [[-1.2, -0.68, 0, 0], [1.2, -0.68, 0, 180], [-1.2, 0.68, 0, 180], [1.2, 0.7, 0, 0], [1.15, -0.66, 1, 2]],
-    });
+    const a = shipLocal(-8.6, -6.9);
+    addCrateGroup({ style: 'hazard', x: a.x, z: a.z, yawDeg: SHIP_AXIS_AZ - 4, items: [[0, -0.68, 0, 0], [0.1, 0.7, 0, 180], [0.05, 0.02, 1, 2]] });
   }
   // (B) tanks + white hazard containers beside the ship's mid flank (t15–t18.5)
   {
     const t = shipLocal(-3.6, 8.9);
     addTankGroup({ x: t.x, z: t.z, yawDeg: SHIP_AXIS_AZ, items: [[-0.6, 0.45], [0.6, 0.5], [-0.25, -0.62], [0.95, -0.6]] });
-    const c = shipLocal(0.4, 8.9);
-    const crates = addCrateGroup({ style: 'hazard', x: c.x, z: c.z, yawDeg: SHIP_AXIS_AZ + 2, items: [[-1.2, 0.08, 0, 0], [1.22, -0.1, 0, 180]] });
+    const c = shipLocal(1.2, 9.3);
+    const crates = addCrateGroup({ style: 'hazard', x: c.x, z: c.z, yawDeg: SHIP_AXIS_AZ + FLANK_CRATE_TURN, items: [[-1.2, 0.08, 0, 0], [1.22, -0.1, 0, 180]] });
     tankOnCrate(crates[1], 'hazard', -0.6);
   }
   // (C) white modular containers stacked off the ship's rear quarter (t15/t17 right side)
   {
     const p = shipLocal(3.0, 15.0);
-    addCrateGroup({ style: 'row', x: p.x, z: p.z, yawDeg: SHIP_AXIS_AZ + 8, items: [[-1.25, 0, 0, 0], [1.25, 0.1, 0, 180], [1.3, -1.2, 0, 0], [0.7, -0.55, 1, 2]] });
+    addCrateGroup({ style: 'row', x: p.x, z: p.z, yawDeg: SHIP_AXIS_AZ + FLANK_CRATE_TURN, items: [[-1.25, 0, 0, 0], [1.25, 0.1, 0, 180], [1.3, -1.2, 0, 0], [0.7, -0.55, 1, 2]] });
   }
-  // (D) dark crate row in front-left of the spawn (t01)
+  // (D) dark crates front-left of the spawn (t01): two side by side and one on top of the west one,
+  // long faces toward the spawn. Kept at spawn bearings > 310° so that they stay out of the
+  // sunward t21/t30 frames, which are taken from just west of the spawn.
   {
-    const p = polar(9, 14.8);
-    addCrateGroup({ style: 'dark', x: p.x, z: p.z, yawDeg: 99, items: [[-3.8, 0, 0, 0], [-1.3, 0, 0, 180], [1.25, 0.05, 0, 0], [-3.15, 0, 1, 1], [-0.65, 0.02, 1, 179]] });
+    const p = clusterPolar(21, 13.5);
+    addCrateGroup({ style: 'dark', x: p.x, z: p.z, yawDeg: 111 + SHIP_CLUSTER_TURN_DEG, items: [[-1.25, 0, 0, 0], [1.25, 0.04, 0, 180], [-0.62, 0.02, 1, 1]] });
   }
   // (E) second white container row + tank cluster around the t41.5 viewpoint: rover centre-left,
   // a short row receding to the right toward its tanks, a dark crate with a free top close by (t47).
@@ -220,11 +233,12 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
     const d = polar(v.yawDeg + 50, 3.7, v.x, v.z);
     addCrateGroup({ style: 'dark', x: d.x, z: d.z, yawDeg: v.yawDeg - 12, items: [[0, 0, 0, 0]] });
   }
-  // (F) backlit group toward the Sun (t08, t12, t21, t30): row modules + dark crate on top, tank pair beyond
+  // (F) backlit group toward the Sun (t08, t12, t21, t30): row modules + a module on top, tank pair beyond
   {
     const c = SUNWARD_CRATES;
     addCrateGroup({ style: 'row', x: c.x, z: c.z, yawDeg: 3.7, items: [[-1.25, 0, 0, 0], [1.25, 0, 0, 180], [1.45, -1.2, 0, 0]] });
-    addCrateGroup({ style: 'dark', x: c.x, z: c.z, yawDeg: 3.7, baseLift: crateLift('row') - 0.06, items: [[-0.1, -0.2, 0, 2]] });
+    // light module on top (a dark crate in shade would read near-black; the reference shows a light one)
+    addCrateGroup({ style: 'row', x: c.x, z: c.z, yawDeg: 3.7, baseLift: crateLift('row') - 0.06, items: [[-0.1, -0.2, 0, 2]] });
     addTankGroup({ x: SUNWARD_TANKS.x, z: SUNWARD_TANKS.z, yawDeg: 164, items: [[-0.52, 0], [0.52, 0.06]] });
   }
 
@@ -278,8 +292,11 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
   {
     const geo = tankGeometry(lowPower);
     const map = tankDetailMap(lowPower, 0x7a2c);
-    // a little darker than the kit's TANK_PAINT so the lit side reads ≈ 140 like the reference
-    const mat = new THREE.MeshStandardMaterial({ color: 0xaaa5ae, map, roughness: TANK_PAINT.roughness + 0.06, metalness: TANK_PAINT.metalness });
+    // light paint: the sunlit left edge reads ≈ 180 like the reference (t15–t18.5)
+    const mat = new THREE.MeshStandardMaterial({ color: 0xd6d1da, map, roughness: TANK_PAINT.roughness + 0.06, metalness: TANK_PAINT.metalness });
+    // Mild regolith bounce only: a strong boost lifts the close-up shadow side (ref t18.5 ≈ 3–5) far
+    // more than it helps distant backlit tanks, and the close-up is the more prominent view.
+    bindEnvironmentBoost(mat, 1.1);
     const mesh = new THREE.InstancedMesh(geo, mat, tankMatrices.length);
     tankMatrices.forEach((m, i) => mesh.setMatrixAt(i, m));
     mesh.instanceMatrix.needsUpdate = true;
@@ -294,8 +311,8 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
 
   // ------------------------------------------------------------------ rovers
   const roverPoses = [
-    // rover 1: ~20 m ahead-left of the spawn, ~10 m from the white containers at the ship's head (t01, t05)
-    { ...polar(23.5, 20), yawDeg: 114 },
+    // rover 1: 11 m ahead-left of the spawn, just right of the dark crates (t01); close on the left in t05
+    { ...clusterPolar(36, 11.4), yawDeg: 114 + SHIP_CLUSTER_TURN_DEG },
     // rover 2: centre-left of the t41.5 view
     { ...polar(T41_VIEW.yawDeg - 8, 16, T41_VIEW.x, T41_VIEW.z), yawDeg: T41_VIEW.yawDeg + 8 },
   ];

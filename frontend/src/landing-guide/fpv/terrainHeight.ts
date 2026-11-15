@@ -156,7 +156,7 @@ function azWindow(azDeg: number, c: number, hw: number, fade: number): number {
 // ---------------------------------------------------------------------------------------------
 
 /** Knots every 30° from North (clockwise): crest height (m), rise start and crest radius (m). */
-export const BOWL_HEIGHT = [-0.6, 1.0, 6.3, 6.2, 6.0, 6.3, 6.4, 6.8, 4.8, 6.0, 5.4, 1.8];
+export const BOWL_HEIGHT = [-0.6, 1.0, 6.3, 6.2, 6.0, 6.3, 3.0, 2.5, 1.5, 0.3, 0.3, 1.0];
 export const BOWL_RISE_START = [118, 128, 121, 98, 84, 64, 56, 60, 80, 40, 46, 70];
 export const BOWL_CREST = [262, 250, 196, 180, 176, 165, 152, 158, 178, 104, 110, 150];
 
@@ -183,11 +183,38 @@ interface FarRidge {
   faceW: number;
   bench: number;
   benchH: number;
+  /**
+   * Basin in front of the face: depth (m) and the radii (m) over which the ground sinks to it.
+   * The basin floor stays below the sight line from the base, so the dark face is seen whole
+   * right above the near ground (no lit floor strip in between).
+   */
+  basin: number;
+  basin0: number;
+  basin1: number;
 }
 
 export const FAR_RIDGES: readonly FarRidge[] = [
   // Right of the Sun (as seen from the base): broken ridge beyond the W/NW depression.
-  { az: 291, hw: 22, fade: 16, r: 1080, wander: 130, face: 46, faceW: 180, bench: 50, benchH: 6.5 },
+  { az: 289, hw: 24, fade: 16, r: 1080, wander: 130, face: 17, faceW: 180, bench: 50, benchH: 6.5, basin: 22, basin0: 50, basin1: 650 },
+];
+
+/**
+ * Local knolls (elliptical swells): a rise SW of the sunward group, so the ground climbs on the
+ * left of the views from there toward the Sun while it stays low as seen end-on from the base,
+ * and a broad rise NE/E beyond the second container row. Centre (m), semi-axes a (along
+ * `axisAz`, degrees clockwise from North) and b (m), height h (m).
+ */
+export interface Knoll {
+  x: number;
+  z: number;
+  a: number;
+  b: number;
+  axisAz: number;
+  h: number;
+}
+export const KNOLLS: readonly Knoll[] = [
+  { x: -59, z: 96, a: 68, b: 67, axisAz: 219, h: 5.5 },
+  { x: 106.5, z: -138.7, a: 73, b: 45.5, axisAz: 100, h: 5.2 },
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -310,6 +337,26 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     return w;
   };
 
+  const knollAxes = KNOLLS.map((k) => {
+    const a = (k.axisAz * Math.PI) / 180;
+    return { ux: Math.sin(a), uz: -Math.cos(a) };
+  });
+  const knollsAt = (x: number, z: number): number => {
+    let sum = 0;
+    for (let i = 0; i < KNOLLS.length; i++) {
+      const k = KNOLLS[i];
+      const dx = x - k.x;
+      const dz = z - k.z;
+      const u = (dx * knollAxes[i].ux + dz * knollAxes[i].uz) / k.a;
+      const v = (-dx * knollAxes[i].uz + dz * knollAxes[i].ux) / k.b;
+      const q2 = u * u + v * v;
+      if (q2 >= 1) continue;
+      const t = 1 - q2;
+      sum += k.h * t * t;
+    }
+    return sum;
+  };
+
   /** Scratch: per far ridge, its sector weight then its crest radius (filled by `raw`). */
   const ridgeCrest = new Float64Array(2 * FAR_RIDGES.length);
 
@@ -327,6 +374,7 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     // --- Calm floor of the base and the low bowl rim around it -----------------------------
     const r0 = bowlRiseStart(x, z, azR, sc);
     h += bowlAt(x, z, r, azR, sc);
+    h += knollsAt(x, z);
     /** 0 on the calm floor (props), 1 beyond the start of the rim. */
     const rough = smooth(r0 - 8, r0 + 55, r);
 
@@ -359,8 +407,9 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
     // Far ridge crest radii (per ridge) and the depression floor in front of their faces, where
     // the far swells/hummocks/hills are damped so the dark faces are seen whole from the base.
     let floorK = 0;
+    let basinDrop = 0;
     const crest = ridgeCrest;
-    if (r > 300) {
+    if (r > 100) {
       for (let k = 0; k < FAR_RIDGES.length; k++) {
         const g = FAR_RIDGES[k];
         const sector = azWindow(azDeg, g.az, g.hw, g.fade);
@@ -374,11 +423,13 @@ export function createHeightField(opts: HeightFieldOptions): HeightField {
           0.3 * g.wander * band(500, sc) * gnoise(x / 500, z / 500, seedR + 1);
         crest[FAR_RIDGES.length + k] = rc;
         const f0 = rc - g.faceW;
-        floorK = Math.max(floorK, sector * smooth(f0 - 520, f0 - 220, r) * (1 - smooth(f0 + 0.3 * g.faceW, rc, r)));
+        const sink = sector * smooth(g.basin0, g.basin1, r);
+        floorK = Math.max(floorK, sink * (1 - smooth(f0 + 0.3 * g.faceW, rc, r)));
+        basinDrop = Math.max(basinDrop, g.basin * sink * (1 - smooth(f0, rc - g.bench, r)));
       }
     }
     const keep = 1 - 0.85 * floorK;
-    h -= 4 * floorK;
+    h -= basinDrop;
 
     // Broad swells of the plain beyond the base.
     const fM = smooth(160, 700, r) * keep;
