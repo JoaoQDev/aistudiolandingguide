@@ -1,13 +1,33 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { EngineeringConfig, LandingSiteEntry, MissionWindow } from '../navigator/types';
 import { parseDebugPose } from './fpv/controlsPose';
-import type { ExperienceHandle } from './fpv/types';
+import { buildMissionSceneState, SKY_HEIGHT_EXAGGERATION } from './fpv/missionSky';
+import type { ExperienceHandle, PlayerPose, PointOfInterest } from './fpv/types';
+import { HorizonStrip } from './fpv/uiHorizonStrip';
 import { VirtualJoystick } from './fpv/uiJoystick';
-import { EvaluatedSlotEntry } from './state';
+import { MissionHud } from './fpv/uiMission';
+import { EvaluatedSlotEntry, PlaybackSpeed, WindowSlice } from './state';
 
 interface AstronautViewportProps {
   entries: EvaluatedSlotEntry[];
   activeSlotIdx: number;
+  onSelectActiveSlot: (index: number) => void;
   epochIdx: number;
+  missionWindow: MissionWindow;
+  /** Azimuths (deg) of every site's horizon profile samples. */
+  horizonAzDeg: number[];
+  slice: WindowSlice;
+  isPlaying: boolean;
+  speed: PlaybackSpeed;
+  onTogglePlay: () => void;
+  onChangeEpoch: (index: number) => void;
+  onChangeSpeed: (speed: PlaybackSpeed) => void;
+  config: EngineeringConfig;
+  /**
+   * Site whose id/skyline seed the illustrative base-camp scenery. Kept constant so switching the
+   * compared site or the time never rebuilds the scene — only the sky and mission state change.
+   */
+  scenerySite: LandingSiteEntry;
   /** Leaves the Astronaut view (back to Orbit 3D). Also bound to Esc when Pointer Lock is not active. */
   onExit?: () => void;
 }
@@ -30,13 +50,6 @@ function detectWebGL(): { supported: boolean; isSoftwareGl: boolean } {
     return { supported: false, isSoftwareGl: true };
   }
 }
-
-/**
- * Illustrative lighting: the Sun keeps the dataset azimuth, but its *visual* elevation is fixed
- * so the scene reads like a daylight walk. South Pole sites really see the Sun only ~1–2° up;
- * the overlay tells the user this lighting is illustrative. Earth stays at its dataset position.
- */
-export const ILLUSTRATIVE_SUN_ELEVATION_DEG = 10;
 
 /** Same illustrative tremor for both buttons: no magnitude, duration or catalog value is implied. */
 const ILLUSTRATIVE_TREMOR = { intensity: 0.7, durationS: 3 } as const;
@@ -70,26 +83,62 @@ type GlState = 'pending' | 'ready' | 'unsupported' | 'failed';
  * two illustrative tremor buttons, twin virtual sticks, the illustrative-lighting note and the
  * way back to Orbit 3D.
  */
-export const AstronautViewport: React.FC<AstronautViewportProps> = ({ entries, activeSlotIdx, epochIdx, onExit }) => {
+export const AstronautViewport: React.FC<AstronautViewportProps> = ({
+  entries,
+  activeSlotIdx,
+  onSelectActiveSlot,
+  epochIdx,
+  missionWindow,
+  horizonAzDeg,
+  slice,
+  isPlaying,
+  speed,
+  onTogglePlay,
+  onChangeEpoch,
+  onChangeSpeed,
+  config,
+  scenerySite,
+  onExit,
+}) => {
   const activeEntry = entries[activeSlotIdx] ?? entries[0];
   const { site, analysis } = activeEntry;
+  const ep = analysis.epochStates[epochIdx];
+  const sky = site.sky_series;
+  const datasetSunEl = sky.sun_el_deg[epochIdx];
 
-  const sunAz = site.sky_series.sun_az_deg[epochIdx] ?? 0;
-  const sunEl = ILLUSTRATIVE_SUN_ELEVATION_DEG;
-  const earthAz = site.sky_series.earth_az_deg[epochIdx] ?? 0;
-  const earthEl = site.sky_series.earth_el_deg[epochIdx] ?? 0;
-  const datasetSunEl = site.sky_series.sun_el_deg[epochIdx];
+  // Real conditions at the active site and time → what the scene draws (see fpv/missionSky.ts).
+  const mission = useMemo(
+    () =>
+      buildMissionSceneState({
+        sunAzDeg: sky.sun_az_deg[epochIdx] ?? 0,
+        sunElDeg: sky.sun_el_deg[epochIdx] ?? 0,
+        horizonAtSunDeg: ep?.horizonAtSunDeg ?? 0,
+        sunIllumFraction: ep?.fIllum ?? 0,
+        earthAzDeg: sky.earth_az_deg[epochIdx] ?? 0,
+        earthElDeg: sky.earth_el_deg[epochIdx] ?? 0,
+        horizonAtEarthDeg: ep?.horizonAtEarthDeg ?? 0,
+        powerW: ep?.powerW ?? 0,
+        peakPowerW: analysis.solar.peakPowerW,
+        dteVisible: ep?.dteVisible ?? false,
+        combinedLinkVisible: ep?.combinedLinkVisible ?? false,
+      }),
+    [sky, epochIdx, ep, analysis.solar.peakPowerW],
+  );
 
   const mountRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<ExperienceHandle | null>(null);
-  const skyRef = useRef({ sunAz, sunEl, earthAz, earthEl });
-  skyRef.current = { sunAz, sunEl, earthAz, earthEl };
+  const missionRef = useRef(mission);
+  missionRef.current = mission;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
   const [glState, setGlState] = useState<GlState>('pending');
+  const [pointsOfInterest, setPointsOfInterest] = useState<readonly PointOfInterest[]>([]);
 
-  const seed = hashString(site.id);
-  const horizonElevDeg = analysis.terrain.horizonElevDeg;
+  const getPose = useCallback((): PlayerPose | null => handleRef.current?.getPose() ?? null, []);
+  const getHeadingDeg = useCallback((): number => handleRef.current?.getPose().yawDeg ?? 0, []);
+
+  const seed = hashString(scenerySite.id);
+  const horizonElevDeg = scenerySite.horizon_elev_deg;
   const horizonRef = useRef(horizonElevDeg);
   horizonRef.current = horizonElevDeg;
   // Rebuild the scene only when the skyline really changes, not on every new array identity.
@@ -112,18 +161,15 @@ export const AstronautViewport: React.FC<AstronautViewportProps> = ({ entries, a
     import('./fpv/experience')
       .then(({ createMoonbaseExperience }) => {
         if (cancelled) return;
-        const s = skyRef.current;
         handle = createMoonbaseExperience(mountEl, {
           seed,
           lowPower: isSoftwareGl,
           horizonElevDeg: horizonRef.current,
-          sunAzDeg: s.sunAz,
-          sunElDeg: s.sunEl,
-          earthAzDeg: s.earthAz,
-          earthElDeg: s.earthEl,
+          mission: missionRef.current,
           debugPose: parseDebugPose(window.location.search),
         });
         handleRef.current = handle;
+        setPointsOfInterest(handle.pointsOfInterest);
         setGlState('ready');
       })
       .catch((err: unknown) => {
@@ -139,8 +185,8 @@ export const AstronautViewport: React.FC<AstronautViewportProps> = ({ entries, a
   }, [seed, horizonKey]);
 
   useEffect(() => {
-    handleRef.current?.setSky(sunAz, sunEl, earthAz, earthEl);
-  }, [sunAz, sunEl, earthAz, earthEl, glState]);
+    handleRef.current?.setMissionState(mission);
+  }, [mission, glState]);
 
   // Esc returns to Orbit 3D — unless it was the press that released Pointer Lock.
   useEffect(() => {
@@ -163,8 +209,9 @@ export const AstronautViewport: React.FC<AstronautViewportProps> = ({ entries, a
   }, []);
 
   const lightingDetail =
-    `The Sun is drawn ${ILLUSTRATIVE_SUN_ELEVATION_DEG}° above the horizon at its dataset azimuth` +
-    (Number.isFinite(datasetSunEl) ? `; dataset Sun elevation at this time: ${datasetSunEl.toFixed(1)}°.` : '.');
+    `The base-camp scenery is illustrative. Sun and Earth are drawn at their dataset azimuth, with their height ` +
+    `above the terrain horizon exaggerated ×${SKY_HEIGHT_EXAGGERATION}` +
+    (Number.isFinite(datasetSunEl) ? `; real Sun elevation at this time: ${datasetSunEl.toFixed(1)}°.` : '.');
 
   return (
     <div
@@ -198,6 +245,43 @@ export const AstronautViewport: React.FC<AstronautViewportProps> = ({ entries, a
           </button>
         ))}
       </div>
+
+      <HorizonStrip
+        horizonAzDeg={horizonAzDeg}
+        horizonElevDeg={analysis.terrain.horizonElevDeg}
+        sunAzDeg={sky.sun_az_deg}
+        sunElDeg={sky.sun_el_deg}
+        earthAzDeg={sky.earth_az_deg}
+        earthElDeg={sky.earth_el_deg}
+        solarAngularRadiusDeg={missionWindow.solar_angular_radius_deg}
+        earthAngularRadiusDeg={missionWindow.earth_angular_radius_deg}
+        epochIdx={epochIdx}
+        windowStartIdx={slice.startIdx}
+        windowEndIdx={slice.endIdx}
+        sunIllumFraction={ep?.fIllum ?? 0}
+        dteVisible={ep?.dteVisible ?? false}
+        getHeadingDeg={getHeadingDeg}
+      />
+
+      <MissionHud
+        entries={entries}
+        activeSlotIdx={activeSlotIdx}
+        onSelectActiveSlot={onSelectActiveSlot}
+        epochIdx={epochIdx}
+        timestampsUtc={missionWindow.timestamps_utc}
+        stepSeconds={missionWindow.step_seconds}
+        windowStartIdx={slice.startIdx}
+        windowEndIdx={slice.endIdx}
+        isPlaying={isPlaying}
+        speed={speed}
+        onTogglePlay={onTogglePlay}
+        onChangeEpoch={onChangeEpoch}
+        onChangeSpeed={onChangeSpeed}
+        config={config}
+        mission={mission}
+        getPose={getPose}
+        pointsOfInterest={pointsOfInterest}
+      />
 
       <VirtualJoystick side="left" onChange={(x, y) => handleRef.current?.setMoveVector(x, y)} />
       <VirtualJoystick

@@ -10,7 +10,7 @@ import {
 } from './experiencePerf';
 import { configureRenderer, createLunarSky } from './sky';
 import { createLunarGround } from './terrain';
-import type { ExperienceHandle, ExperienceOptions, FrameContext } from './types';
+import type { ExperienceHandle, ExperienceOptions, FrameContext, MissionSceneState } from './types';
 
 export { parseDebugPose } from './controlsPose';
 export { MAX_PIXEL_RATIO, pickPixelRatio } from './experiencePerf';
@@ -96,13 +96,16 @@ export function createMoonbaseExperience(mount: HTMLElement, opts: ExperienceOpt
   });
 
   const dirScratch = new THREE.Vector3();
-  const setSky = (sunAz: number, sunEl: number, earthAz: number, earthEl: number) => {
-    azElToDirection(sunAz, sunEl, dirScratch);
+  const setMissionState = (m: MissionSceneState) => {
+    azElToDirection(m.sunAzDeg, m.sunDrawnElDeg, dirScratch);
     sky.setSunDirection(dirScratch);
     ground.setSunDirection?.(dirScratch);
-    sky.setEarthDirection(azElToDirection(earthAz, earthEl, dirScratch));
+    sky.setEarthDirection(azElToDirection(m.earthAzDeg, m.earthDrawnElDeg, dirScratch));
+    sky.setSunIllumination?.(m.sunIllumFraction);
+    ground.setSunIllumination?.(m.sunIllumFraction);
+    base.setMissionState?.(m);
   };
-  setSky(opts.sunAzDeg, opts.sunElDeg, opts.earthAzDeg, opts.earthElDeg);
+  setMissionState(opts.mission);
 
   let last = performance.now();
   let elapsed = 0;
@@ -192,7 +195,9 @@ export function createMoonbaseExperience(mount: HTMLElement, opts: ExperienceOpt
   if (!document.hidden) start();
 
   return {
-    setSky,
+    setMissionState,
+    getPose: (out) => controller.getPose(out),
+    pointsOfInterest: base.pointsOfInterest ?? [],
     setMoveVector: (x, y) => controller.setMoveVector(x, y),
     addLook: (dy, dp) => controller.addLook(dy, dp),
     triggerTremor: (i, d) => controller.triggerTremor(i, d),

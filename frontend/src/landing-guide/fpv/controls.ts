@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { EYE_HEIGHT_M, WALK_RADIUS_M } from './types';
-import type { CircleCollider, ControllerModule, ControllerOptions, FrameContext } from './types';
+import type { CircleCollider, ControllerModule, ControllerOptions, FrameContext, PlayerPose } from './types';
 
 /**
  * First-person walking controller for the Astronaut view.
@@ -226,6 +226,14 @@ export function createFirstPersonController(opts: ControllerOptions): Controller
     camera.updateMatrixWorld();
   };
 
+  const getPose = (out: PlayerPose = { x: 0, z: 0, yawDeg: 0, pitchDeg: 0 }): PlayerPose => {
+    out.x = walker.x;
+    out.z = walker.z;
+    out.yawDeg = yaw;
+    out.pitchDeg = pitch;
+    return out;
+  };
+
   // ---------------------------------------------------------------- frozen (debug pose)
   if (frozen) {
     const update = () => {
@@ -239,6 +247,7 @@ export function createFirstPersonController(opts: ControllerOptions): Controller
       setMoveVector() {},
       addLook() {},
       triggerTremor() {},
+      getPose,
       dispose() {},
     };
   }
@@ -463,6 +472,7 @@ export function createFirstPersonController(opts: ControllerOptions): Controller
       if (i <= 0) return;
       tremor = { start: time, duration: d, intensity: i };
     },
+    getPose,
     dispose() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);

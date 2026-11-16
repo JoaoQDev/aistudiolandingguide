@@ -248,8 +248,8 @@ describe('Lunar Landing Site Navigator — Landing Guide', () => {
       fireEvent.click(pill); // purely visual tremor; must not throw without WebGL
     }
     const lightingNote = screen.getByText(/Illustrative lighting/i);
-    expect(lightingNote).toHaveAttribute('title', expect.stringMatching(/drawn 10° above the horizon/));
-    expect(lightingNote).toHaveTextContent(/dataset Sun elevation at this time: -?\d+\.\d°/);
+    expect(lightingNote).toHaveAttribute('title', expect.stringMatching(/height above the terrain horizon exaggerated ×3/));
+    expect(lightingNote).toHaveTextContent(/real Sun elevation at this time: -?\d+\.\d°/);
     expect(screen.getByTestId('fpv-stick-left')).toBeInTheDocument();
     expect(screen.getByTestId('fpv-stick-right')).toBeInTheDocument();
     for (const name of [/Return to Mission Brief/i, /^Charts$/i, /^Data/i, /Sites \(/i, /^Time$/i, /^Moon$/, /^Topography$/, /^Astronaut$/]) {

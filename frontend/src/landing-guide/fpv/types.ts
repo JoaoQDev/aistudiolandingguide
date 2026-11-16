@@ -39,6 +39,8 @@ export interface GroundModule extends SceneModule {
   heightAt(x: number, z: number): number;
   /** Optional: receives the same unit Sun direction as the sky (e.g. for forward-scatter glare). */
   setSunDirection?(dir: THREE.Vector3): void;
+  /** Optional: fraction of the solar disc above the real terrain horizon, 0..1 (scales sun-driven shading). */
+  setSunIllumination?(fraction: number): void;
 }
 
 export interface SkyOptions {
@@ -53,6 +55,49 @@ export interface SkyModule extends SceneModule {
   setSunDirection(dir: THREE.Vector3): void;
   /** Unit vector (world space) pointing from the ground toward the Earth. */
   setEarthDirection(dir: THREE.Vector3): void;
+  /** Fraction of the solar disc above the real terrain horizon, 0..1: 0 = night at the site. */
+  setSunIllumination?(fraction: number): void;
+}
+
+/**
+ * Real mission conditions at the active site and time, mapped for the scene by missionSky.ts.
+ * Azimuths, visibility, power and link state come from the dataset; only the *drawn* heights
+ * are exaggerated (see SKY_HEIGHT_EXAGGERATION) so they read over the illustrative scenery.
+ */
+export interface MissionSceneState {
+  /** Dataset Sun azimuth (deg, clockwise from North). */
+  sunAzDeg: number;
+  /** Drawn Sun elevation above the game horizon (deg) = real margin above terrain × exaggeration. */
+  sunDrawnElDeg: number;
+  /** Fraction of the solar disc above the real terrain horizon, 0..1. */
+  sunIllumFraction: number;
+  /** Dataset Earth azimuth (deg, clockwise from North). */
+  earthAzDeg: number;
+  /** Drawn Earth elevation above the game horizon (deg) = real margin above terrain × exaggeration. */
+  earthDrawnElDeg: number;
+  /** Electrical power now relative to the best hour of the active site's series, 0..1. */
+  powerFraction: number;
+  /** Best link available right now: direct-to-Earth, relay only, or none. */
+  link: 'dte' | 'relay' | 'none';
+}
+
+/** A place in the base the guide can send the player to. */
+export interface PointOfInterest {
+  id: 'solar-array' | 'antenna';
+  x: number;
+  z: number;
+  /** The player counts as "there" within this distance (m). */
+  radius: number;
+  label: string;
+}
+
+export interface PlayerPose {
+  x: number;
+  z: number;
+  /** Heading in degrees, clockwise from North (-Z), unwrapped (may exceed 0..360). */
+  yawDeg: number;
+  /** Degrees, positive looks up. */
+  pitchDeg: number;
 }
 
 /** Circle collider on the XZ plane; the player cannot enter it. */
@@ -80,6 +125,10 @@ export interface PropsOptions {
 export interface PropsModule extends SceneModule {
   colliders: CircleCollider[];
   spawn: SpawnPose;
+  /** Mission props (solar array, antenna) the guide can point at. */
+  pointsOfInterest?: PointOfInterest[];
+  /** Optional: real mission conditions (array tracks the Sun, antenna points at Earth, status lights). */
+  setMissionState?(state: MissionSceneState): void;
 }
 
 export interface ControllerOptions {
@@ -100,6 +149,8 @@ export interface ControllerModule {
   addLook(dYawDeg: number, dPitchDeg: number): void;
   /** Illustrative camera tremor; intensity in [0, 1], duration in seconds. */
   triggerTremor(intensity: number, durationS: number): void;
+  /** Current player pose (smoothed, as rendered). Writes into `out` when given. */
+  getPose(out?: PlayerPose): PlayerPose;
   dispose(): void;
 }
 
@@ -107,16 +158,17 @@ export interface ExperienceOptions {
   seed: number;
   lowPower: boolean;
   horizonElevDeg?: number[];
-  sunAzDeg: number;
-  sunElDeg: number;
-  earthAzDeg: number;
-  earthElDeg: number;
+  /** Initial mission conditions (Sun/Earth directions, illumination, power, link). */
+  mission: MissionSceneState;
   /** Optional fixed pose (debug/screenshot), usually parsed from `?fpvPose=x,z,yaw,pitch`. */
   debugPose?: SpawnPose | null;
 }
 
 export interface ExperienceHandle {
-  setSky(sunAzDeg: number, sunElDeg: number, earthAzDeg: number, earthElDeg: number): void;
+  /** Applies new mission conditions to sky, ground and props. */
+  setMissionState(state: MissionSceneState): void;
+  getPose(out?: PlayerPose): PlayerPose;
+  readonly pointsOfInterest: readonly PointOfInterest[];
   setMoveVector(x: number, y: number): void;
   addLook(dYawDeg: number, dPitchDeg: number): void;
   triggerTremor(intensity: number, durationS: number): void;

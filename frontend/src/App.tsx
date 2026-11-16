@@ -49,6 +49,21 @@ function getInitialAutostart(): boolean {
   return new URLSearchParams(window.location.search).get('autostart') === '1';
 }
 
+/** `?epoch=<index>` opens at that hourly epoch of the mission window (deep links, screenshots). */
+function getInitialEpochIdx(): number {
+  if (typeof window === 'undefined') return 0;
+  const raw = Number(new URLSearchParams(window.location.search).get('epoch'));
+  return Number.isInteger(raw) && raw > 0 ? raw : 0;
+}
+
+/** `?site=<site id>` puts that precomputed site in slot A (deep links, screenshots). */
+function getInitialSiteId(dataset: NavigatorDatasetV1): string {
+  const fallback = dataset.sites[0].id;
+  if (typeof window === 'undefined') return fallback;
+  const wanted = new URLSearchParams(window.location.search).get('site');
+  return dataset.sites.some((s) => s.id === wanted) ? (wanted as string) : fallback;
+}
+
 function getInitialViewportMode(): ViewportMode {
   if (typeof window === 'undefined') return '3d';
   return new URLSearchParams(window.location.search).get('view') === 'astronaut' ? 'astronaut' : '3d';
@@ -66,14 +81,14 @@ export function App({ dataset = defaultDataset }: AppProps) {
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('cursor');
 
   const [slots, setSlots] = useState<SiteSlotState[]>(() => [
-    { siteId: dataset.sites[0].id, offsetXNorm: 0, offsetYNorm: 0 },
+    { siteId: getInitialSiteId(dataset), offsetXNorm: 0, offsetYNorm: 0 },
   ]);
   const [customSites, setCustomSites] = useState<Record<string, LandingSiteEntry>>({});
   const [activeSlotIdx, setActiveSlotIdx] = useState<number>(0);
 
   const [startIdx, setStartIdx] = useState<number>(0);
   const [durationDays, setDurationDays] = useState<DurationDays>(30);
-  const [epochIdx, setEpochIdx] = useState<number>(0);
+  const [epochIdx, setEpochIdx] = useState<number>(getInitialEpochIdx);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [config, setConfig] = useState<EngineeringConfig>(DEFAULT_CONFIG);
@@ -367,7 +382,21 @@ export function App({ dataset = defaultDataset }: AppProps) {
         <AstronautViewport
           entries={entries}
           activeSlotIdx={safeActiveIdx}
+          onSelectActiveSlot={setActiveSlotIdx}
           epochIdx={clampedEpochIdx}
+          missionWindow={dataset.mission_window}
+          horizonAzDeg={dataset.horizon_azimuths_deg}
+          slice={slice}
+          isPlaying={isPlaying}
+          speed={speed}
+          onTogglePlay={() => setIsPlaying((playing) => !playing)}
+          onChangeEpoch={(idx) => {
+            setIsPlaying(false);
+            setEpochIdx(idx);
+          }}
+          onChangeSpeed={setSpeed}
+          config={config}
+          scenerySite={dataset.sites[0]}
           onExit={() => setViewportMode('3d')}
         />
       )}
