@@ -1,0 +1,281 @@
+/* Sun and Earth labels, edge indicators and key for the Orbit 3D globe (see orbitOverlay.tsx). */
+
+.orbit-overlay {
+  --orbit-sun: #ffd166;
+  --orbit-earth: #7cc4ff;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.orbit-overlay text {
+  paint-order: stroke;
+  stroke: #000000;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+/* Body labels */
+.orbit-body-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.orbit-body-note {
+  font-size: 9.5px;
+  font-weight: 500;
+  fill: #a1a1aa;
+}
+
+.orbit-body-label-sun .orbit-body-name {
+  fill: var(--orbit-sun);
+}
+
+.orbit-body-label-earth .orbit-body-name {
+  fill: var(--orbit-earth);
+}
+
+/* Body hidden behind the Moon */
+.orbit-ghost circle {
+  fill: none;
+  stroke-width: 1.4;
+  stroke-dasharray: 3 3;
+}
+
+.orbit-ghost text {
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.orbit-ghost-sun circle {
+  stroke: var(--orbit-sun);
+}
+
+.orbit-ghost-sun text {
+  fill: var(--orbit-sun);
+}
+
+.orbit-ghost-earth circle {
+  stroke: var(--orbit-earth);
+}
+
+.orbit-ghost-earth text {
+  fill: var(--orbit-earth);
+}
+
+/* Heading arrows on the surface, from the active site */
+.orbit-arrow path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.orbit-arrow-halo {
+  stroke: rgba(0, 0, 0, 0.82);
+  stroke-width: 5px;
+}
+
+.orbit-arrow-line {
+  stroke-width: 2.2px;
+}
+
+.orbit-arrow-head {
+  stroke: rgba(0, 0, 0, 0.82);
+  stroke-width: 1px;
+  stroke-linejoin: round;
+}
+
+.orbit-arrow-label {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.orbit-arrow-sun .orbit-arrow-line {
+  stroke: var(--orbit-sun);
+}
+
+.orbit-arrow-sun .orbit-arrow-head,
+.orbit-arrow-sun .orbit-arrow-label {
+  fill: var(--orbit-sun);
+}
+
+.orbit-arrow-earth .orbit-arrow-line {
+  stroke: var(--orbit-earth);
+}
+
+.orbit-arrow-earth .orbit-arrow-head,
+.orbit-arrow-earth .orbit-arrow-label {
+  fill: var(--orbit-earth);
+}
+
+/* Sub-solar / sub-Earth points */
+.orbit-subpoint-ring {
+  fill: rgba(0, 0, 0, 0.35);
+  stroke-width: 1.6;
+}
+
+.orbit-subpoint-label {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.orbit-subpoint-sun .orbit-subpoint-ring {
+  stroke: var(--orbit-sun);
+}
+
+.orbit-subpoint-sun .orbit-subpoint-dot,
+.orbit-subpoint-sun .orbit-subpoint-label {
+  fill: var(--orbit-sun);
+}
+
+.orbit-subpoint-earth .orbit-subpoint-ring {
+  stroke: var(--orbit-earth);
+}
+
+.orbit-subpoint-earth .orbit-subpoint-dot,
+.orbit-subpoint-earth .orbit-subpoint-label {
+  fill: var(--orbit-earth);
+}
+
+/* Edge indicators for bodies outside the view */
+.orbit-edge {
+  cursor: pointer;
+}
+
+.orbit-edge-pill {
+  fill: rgba(10, 10, 12, 0.92);
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 1;
+}
+
+.orbit-edge:hover .orbit-edge-pill,
+.orbit-edge:focus-visible .orbit-edge-pill {
+  fill: rgba(34, 34, 40, 0.98);
+  stroke: rgba(255, 255, 255, 0.5);
+}
+
+.orbit-edge:focus-visible {
+  outline: none;
+}
+
+.orbit-edge:focus-visible .orbit-edge-pill {
+  stroke: var(--focus-ring, #7dd3fc);
+  stroke-width: 2.5;
+}
+
+.orbit-overlay .orbit-edge-text {
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 12.5px;
+  font-weight: 600;
+  fill: #ffffff;
+  stroke: none;
+}
+
+.orbit-edge-chevron {
+  stroke: rgba(0, 0, 0, 0.85);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+
+.orbit-edge-sun .orbit-edge-dot {
+  fill: var(--orbit-sun);
+}
+
+.orbit-edge-sun .orbit-edge-chevron {
+  fill: var(--orbit-sun);
+}
+
+.orbit-edge-earth .orbit-edge-dot {
+  fill: var(--orbit-earth);
+}
+
+.orbit-edge-earth .orbit-edge-chevron {
+  fill: var(--orbit-earth);
+}
+
+/* Key (HTML, above the globe canvas, below the explorer HUD) */
+.orbit-legend {
+  position: fixed;
+  top: 76px;
+  left: 22px;
+  z-index: 4;
+  width: 268px;
+  padding: 10px 12px;
+  border-radius: 2px;
+  background: rgba(10, 10, 12, 0.78);
+  color: #ffffff;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.orbit-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+}
+
+.orbit-legend-swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.orbit-legend-swatch-sun {
+  background: #ffd166;
+  box-shadow: 0 0 8px 2px rgba(255, 209, 102, 0.55);
+}
+
+.orbit-legend-swatch-earth {
+  background: #7cc4ff;
+}
+
+.orbit-legend-name {
+  flex: 0 0 38px;
+  font-weight: 600;
+}
+
+.orbit-legend-value {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.7rem;
+  color: #d4d4d8;
+  white-space: nowrap;
+}
+
+.orbit-legend-note {
+  margin: 6px 0 0;
+  color: #a1a1aa;
+  font-size: 0.72rem;
+}
+
+@media (max-width: 820px) {
+  .orbit-legend {
+    top: 172px;
+    left: 10px;
+    right: 10px;
+    width: auto;
+    padding: 6px 10px;
+    background: rgba(10, 10, 12, 0.6);
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 14px;
+    justify-content: center;
+  }
+
+  .orbit-legend-name {
+    flex-basis: auto;
+  }
+
+  .orbit-legend-value {
+    display: none;
+  }
+
+  .orbit-legend-note {
+    flex-basis: 100%;
+    margin-top: 2px;
+    text-align: center;
+    font-size: 0.68rem;
+  }
+}

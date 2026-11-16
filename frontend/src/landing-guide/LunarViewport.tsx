@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -12,12 +12,38 @@ import {
   LunarAtlasData,
   MAX_ELEV_KM,
   MIN_ELEV_KM,
-  normalizeLon,
   POLAR_CAP_OUTER_SPAN,
   sampleAtlasElevationKmBilinear,
   sphereUnitToLatLon,
   SurfaceMode,
 } from './lunarTerrainEngine';
+import { createOrbitBodies } from './orbitBodies';
+import {
+  bodySubPointsAtEpoch,
+  globeLocalToMoonMe,
+  greatCircleArc,
+  moonMeToGlobeLocal,
+  moonMeUnitToEnuAzEl,
+} from './orbitEphemeris';
+import {
+  OrbitArrowFrame,
+  OrbitBodiesOverlay,
+  OrbitBodyFrame,
+  OrbitOverlayHandle,
+  OrbitPointFrame,
+  OrbitSkyLegend,
+} from './orbitOverlay';
+import {
+  classifyBodyOnScreen,
+  hudSafeInsets,
+  ORBIT_CAMERA_FOV_DEG,
+  ORBIT_EARTH_RADIUS,
+  ORBIT_SUN_CORE_RADIUS,
+  placeEdgeIndicator,
+  ScreenInsets,
+  segmentHitsSphere,
+  systemViewPose,
+} from './orbitScreen';
 import {
   EvaluatedSlotEntry,
   SelectionMode,
@@ -59,6 +85,13 @@ const _scratchToCam = new THREE.Vector3();
 const _scratchHitLocal = new THREE.Vector3();
 const _targetCamPos = new THREE.Vector3();
 const _targetControlsLook = new THREE.Vector3();
+const _scratchBodyWorld = new THREE.Vector3();
+const _scratchBodyCam = new THREE.Vector3();
+
+/** Earth rotation shown on the illustrative Earth: one turn per 24 hourly epochs. */
+const EARTH_SPIN_DEG_PER_EPOCH = 15;
+/** On-screen length aimed for by the surface heading arrows, px. */
+const HEADING_ARROW_PX = 60;
 
 const CALLOUT_OFFSETS: Record<SlotLabel, { dx: number; dy: number }> = {
   A: { dx: 34, dy: -26 },
@@ -192,8 +225,7 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
     C: null,
     D: null,
   });
-  const sunMarkerRef = useRef<SVGGElement | null>(null);
-  const earthMarkerRef = useRef<SVGGElement | null>(null);
+  const orbitOverlayRef = useRef<OrbitOverlayHandle | null>(null);
 
   const [viewportSize, setViewportSize] = useState<{ w: number; h: number }>({
     w: 1280,
@@ -204,13 +236,12 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
   const primarySite = (entries[activeSlotIdx] ?? entries[0]).site;
   const activeEntry = entries[activeSlotIdx] ?? entries[0];
 
-  const subSolarLonDeg = normalizeLon(
-    primarySite.center.longitude_east_deg + (primarySite.sky_series.sun_az_deg[epochIdx] ?? 0),
+  // Exact Moon-fixed Sun and Earth directions for this epoch (sub-solar / sub-Earth points), from
+  // the precomputed sites' topocentric series. The active site is only the fallback.
+  const bodyTargets = useMemo(
+    () => bodySubPointsAtEpoch(sites, primarySite, epochIdx),
+    [sites, primarySite, epochIdx],
   );
-  const subEarthLonDeg = normalizeLon(
-    primarySite.center.longitude_east_deg + (primarySite.sky_series.earth_az_deg[epochIdx] ?? 0),
-  );
-  const subSolarLatDeg = clamp((primarySite.sky_series.sun_el_deg[epochIdx] ?? 0) * 0.45, -2.5, 2.5);
 
   const propsRef = useRef({
     mode,
@@ -220,9 +251,8 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
     activeSlotIdx,
     hasStarted,
     selectionMode,
-    subSolarLonDeg,
-    subSolarLatDeg,
-    subEarthLonDeg,
+    bodyTargets,
+    epochIdx,
     onSelectSiteDirect,
     onOutsidePolarCoverage,
     onReticleChange,
@@ -235,9 +265,8 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
     activeSlotIdx,
     hasStarted,
     selectionMode,
-    subSolarLonDeg,
-    subSolarLatDeg,
-    subEarthLonDeg,
+    bodyTargets,
+    epochIdx,
     onSelectSiteDirect,
     onOutsidePolarCoverage,
     onReticleChange,
@@ -303,7 +332,7 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
     scene.environmentIntensity = 0.06;
     pmremGenerator.dispose();
 
-    const camera = new THREE.PerspectiveCamera(34, initW / Math.max(1, initH), 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(ORBIT_CAMERA_FOV_DEG, initW / Math.max(1, initH), 0.1, 100);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = !isSoftwareGl;
@@ -627,11 +656,54 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
     rimLight.position.set(4, -2, -5);
     scene.add(rimLight);
 
+    // Sun and Earth: exact directions, illustrative size and distance (see orbitBodies.ts). They
+    // live in the globe's local frame, so the same Sun direction drives the DirectionalLight and
+    // the terminator on the Moon matches the Sun that is drawn.
+    const orbitBodies = createOrbitBodies({ lowPower: isSoftwareGl });
+    orbitBodies.setVisible(false);
+    moonGroup.add(orbitBodies.group);
+    let bodiesPrimed = false;
+    const reducedMotionQuery =
+      typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+
+    // The picture is shifted vertically so the globe is centred in the HUD-free part of the
+    // viewport (0 on the hero backdrop). Done with a view offset, so the orbit pivot stays the
+    // Moon's centre and picking keeps working.
+    let viewShiftPx = 0;
+    let viewShiftTargetPx = 0;
+    const applyViewShift = () => {
+      const w = mountEl.clientWidth || initW;
+      const h = mountEl.clientHeight || initH;
+      if (Math.abs(viewShiftPx) < 0.25) {
+        if (camera.view !== null) camera.clearViewOffset();
+      } else {
+        camera.setViewOffset(w, h, 0, -viewShiftPx, w, h);
+      }
+    };
+
+    /** Default explorer framing: looks down on the south pole with room for the Sun and the Earth. */
+    const setSystemViewTarget = () => {
+      const w = mountEl.clientWidth || initW;
+      const h = mountEl.clientHeight || initH;
+      const pose = systemViewPose(w, h, camera.fov);
+      const elev = pose.elevationDeg * DEG;
+      const horiz = pose.distance * Math.cos(elev);
+      const up = pose.distance * Math.sin(elev);
+      _targetControlsLook.set(0, 0, 0);
+      // The globe group is flipped (south pole at +y, 0°E toward −x): a camera leaning toward +z
+      // puts the Earth side on the left of the screen, one leaning toward +x puts it at the top.
+      if (pose.earthSide === 'left') {
+        _targetCamPos.set(0, up, horiz);
+      } else {
+        _targetCamPos.set(horiz, up, 0);
+      }
+      controls.maxDistance = Math.max(12, pose.distance * 1.3);
+    };
+
     const setTargetLayout = (started: boolean, snapImmediate: boolean) => {
       const w = mountEl.clientWidth || initW;
       const h = mountEl.clientHeight || initH;
       const aspect = w / Math.max(1, h);
-      const narrowScale = aspect < 0.9 ? Math.max(1.0, 0.88 / aspect) : 1.0;
 
       if (!started) {
         if (aspect >= 1.0) {
@@ -642,13 +714,15 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
           _targetCamPos.set(-1.1, 2.8, 7.6);
         }
       } else {
-        _targetControlsLook.set(0.0, 0.0, 0.0);
-        _targetCamPos.set(-0.72 * narrowScale, 3.15 * narrowScale, 1.08 * narrowScale);
+        setSystemViewTarget();
       }
+      viewShiftTargetPx = started ? systemViewPose(w, h, camera.fov).shiftYPx : 0;
 
       if (snapImmediate) {
         camera.position.copy(_targetCamPos);
         controls.target.copy(_targetControlsLook);
+        viewShiftPx = viewShiftTargetPx;
+        applyViewShift();
         controls.update();
       }
     };
@@ -663,9 +737,14 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
     let disposed = false;
     const raycaster = new THREE.Raycaster();
 
-    const applySurfaceAndLighting = () => {
-      const { surfaceMode: sm, hasStarted: started, subSolarLonDeg: sLon, subSolarLatDeg: sLat } =
-        propsRef.current;
+    /** Updates materials, lights and the Sun/Earth bodies. Returns true while the bodies still ease. */
+    const applySurfaceAndLighting = (dt: number): boolean => {
+      const {
+        surfaceMode: sm,
+        hasStarted: started,
+        bodyTargets: targets,
+        epochIdx: epoch,
+      } = propsRef.current;
 
       moonUniforms.uTopoMix.value = sm === 'topography' ? 1.0 : 0.0;
       moonUniforms.uReliefStrength.value = sm === 'topography' ? 1.04 : 1.15;
@@ -675,21 +754,36 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
         hemiLight.intensity = 0.96;
         sunLight.intensity = 1.72;
         scene.environmentIntensity = 0.16;
+        rimLight.intensity = 0.22;
       } else {
-        hemiLight.intensity = started ? 0.24 : 0.2;
-        sunLight.intensity = started ? 2.65 : 2.75;
-        scene.environmentIntensity = 0.05;
+        // Explorer: keep the fill low so the day/night terminator set by the real Sun direction
+        // reads clearly; the hero backdrop keeps its own, purely aesthetic lighting.
+        hemiLight.intensity = started ? 0.11 : 0.2;
+        sunLight.intensity = started ? 2.85 : 2.75;
+        scene.environmentIntensity = started ? 0.035 : 0.05;
+        rimLight.intensity = started ? 0.06 : 0.22;
       }
 
       moonGroup.updateMatrixWorld(true);
-      if (!started) {
+
+      let bodiesMoving = false;
+      if (targets) {
+        // Ease between epochs while exploring; jump on the first frame, on the hero backdrop, on
+        // software GL (one frame per epoch) and when the user asked for reduced motion.
+        const snap = !bodiesPrimed || !started || isSoftwareGl || reducedMotionQuery?.matches === true;
+        orbitBodies.setTarget(targets, epoch * EARTH_SPIN_DEG_PER_EPOCH, snap);
+        bodiesMoving = orbitBodies.step(dt);
+        bodiesPrimed = true;
+      }
+      orbitBodies.setVisible(started && targets !== null);
+
+      if (!started || !targets) {
         _scratchV1.set(-4.8, 2.3, 3.5);
       } else {
-        const sunLocal = latLonToSphereUnit(sLat, sLon);
-        _scratchV1.set(sunLocal.x * 8, sunLocal.y * 8, sunLocal.z * 8);
-        _scratchV1.applyQuaternion(moonGroup.quaternion);
+        _scratchV1.copy(orbitBodies.sunDirLocal).multiplyScalar(8).applyQuaternion(moonGroup.quaternion);
       }
       sunLight.position.copy(_scratchV1);
+      return bodiesMoving;
     };
 
     const projectWorldToOverlay = (
@@ -707,6 +801,154 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
         y: (-_scratchV2.y * 0.5 + 0.5) * h,
         visible: frontFacing && _scratchV2.z > -1 && _scratchV2.z < 1,
       };
+    };
+
+    /** True when an interface panel (HUD bar, drawer, popover…) is drawn over this canvas point. */
+    const isCoveredByInterface = (x: number, y: number): boolean => {
+      if (typeof document.elementFromPoint !== 'function') return false;
+      const rect = mountEl.getBoundingClientRect();
+      const el = document.elementFromPoint(rect.left + x, rect.top + y);
+      if (!el || el === document.documentElement || el === document.body) return false;
+      // The canvas itself, and the pins and markers of the SVG overlay, are part of the globe.
+      return !mountEl.contains(el) && !el.closest('.lunar-hud-overlay');
+    };
+
+    const describeBodyOnScreen = (
+      posLocal: THREE.Vector3,
+      radius: number,
+      moonX: number,
+      moonY: number,
+      w: number,
+      h: number,
+      insets: ScreenInsets,
+    ): OrbitBodyFrame => {
+      _scratchBodyWorld.copy(posLocal).applyMatrix4(moonGroup.matrixWorld);
+      _scratchBodyCam.copy(_scratchBodyWorld).applyMatrix4(camera.matrixWorldInverse);
+      const depth = -_scratchBodyCam.z;
+      const inFront = depth > camera.near;
+      // The Moon hides the body when the line of sight to its centre dips below the surface.
+      const occluded = segmentHitsSphere(
+        [camera.position.x, camera.position.y, camera.position.z],
+        [_scratchBodyWorld.x, _scratchBodyWorld.y, _scratchBodyWorld.z],
+        0.985,
+      );
+      const edge = placeEdgeIndicator(_scratchBodyCam.x, -_scratchBodyCam.y, w, h, insets);
+      const pxPerUnit = h / 2 / Math.tan((camera.fov * DEG) / 2) / Math.max(0.05, depth);
+      _scratchBodyWorld.project(camera);
+      const x = (_scratchBodyWorld.x * 0.5 + 0.5) * w;
+      const y = (-_scratchBodyWorld.y * 0.5 + 0.5) * h;
+      const outLen = Math.hypot(x - moonX, y - moonY);
+      return {
+        state: classifyBodyOnScreen({
+          x,
+          y,
+          inFront,
+          occluded,
+          covered: inFront && isCoveredByInterface(x, y),
+          width: w,
+          height: h,
+          marginPx: 4,
+        }),
+        x,
+        y,
+        radiusPx: radius * pxPerUnit,
+        outX: outLen > 1 ? (x - moonX) / outLen : 0,
+        outY: outLen > 1 ? (y - moonY) / outLen : 0,
+        edge,
+      };
+    };
+
+    const hiddenArrow: OrbitArrowFrame = { visible: false, points: [] };
+
+    /** Short great-circle arrow on the surface from a site toward a body direction (globe-local). */
+    const describeHeadingArrow = (
+      latDeg: number,
+      lonEastDeg: number,
+      bodyDirLocal: THREE.Vector3,
+      w: number,
+      h: number,
+    ): OrbitArrowFrame => {
+      const u = latLonToSphereUnit(latDeg, lonEastDeg);
+      const r = displacedRadiusAt(activeAtlas, latDeg, lonEastDeg) + 0.004;
+      const siteProj = projectWorldToOverlay(_scratchV1.set(u.x * r, u.y * r, u.z * r), w, h);
+      if (!siteProj.visible) return hiddenArrow;
+      // Topocentric azimuth of the body at the site = initial heading of the great circle to its
+      // sub-point.
+      const local = moonMeUnitToEnuAzEl(
+        globeLocalToMoonMe(bodyDirLocal.x, bodyDirLocal.y, bodyDirLocal.z),
+        latDeg,
+        lonEastDeg,
+      );
+      // Keep the arrow about the same length on screen whatever the zoom.
+      _scratchV2.set(u.x * r, u.y * r, u.z * r).applyMatrix4(moonGroup.matrixWorld);
+      const dist = Math.max(0.05, _scratchV2.distanceTo(camera.position));
+      const pxPerDeg = (DEG * (h / 2)) / Math.tan((camera.fov * DEG) / 2) / dist;
+      const arcDeg = clamp(HEADING_ARROW_PX / Math.max(1e-3, pxPerDeg), 0.4, 16);
+      const arc = greatCircleArc(latDeg, lonEastDeg, local.azDeg, arcDeg, 6);
+      const points: Array<[number, number]> = [];
+      // Skip the first point so the arrow starts just outside the site marker.
+      for (let i = 1; i < arc.length; i++) {
+        const g = moonMeToGlobeLocal(arc[i]);
+        const proj = projectWorldToOverlay(_scratchV1.set(g.x * r, g.y * r, g.z * r), w, h);
+        if (!proj.visible) return hiddenArrow;
+        points.push([proj.x, proj.y]);
+      }
+      return { visible: true, points };
+    };
+
+    const describeSubPoint = (dirLocal: THREE.Vector3, w: number, h: number): OrbitPointFrame => {
+      const geo = sphereUnitToLatLon(dirLocal.x, dirLocal.y, dirLocal.z);
+      const r = displacedRadiusAt(activeAtlas, geo.latDeg, geo.lonEastDeg) + 0.004;
+      _scratchV1.copy(dirLocal).multiplyScalar(r);
+      // Only when it faces the camera clearly, not while it grazes the limb.
+      _scratchV2.copy(_scratchV1).applyMatrix4(moonGroup.matrixWorld);
+      _scratchNorm.copy(_scratchV2).normalize();
+      _scratchToCam.copy(camera.position).sub(_scratchV2).normalize();
+      const facing = _scratchNorm.dot(_scratchToCam);
+      const proj = projectWorldToOverlay(_scratchV1, w, h);
+      const onScreen = proj.x > 0 && proj.x < w && proj.y > 0 && proj.y < h;
+      return { visible: proj.visible && facing > 0.16 && onScreen, x: proj.x, y: proj.y };
+    };
+
+    const updateOrbitOverlay = (w: number, h: number) => {
+      const overlay = orbitOverlayRef.current;
+      if (!overlay) return;
+      const p = propsRef.current;
+      if (!p.bodyTargets) {
+        overlay.hide();
+        return;
+      }
+      const insets = hudSafeInsets(w, h);
+      _scratchBodyWorld.set(0, 0, 0).project(camera);
+      const moonX = (_scratchBodyWorld.x * 0.5 + 0.5) * w;
+      const moonY = (-_scratchBodyWorld.y * 0.5 + 0.5) * h;
+      const active = (p.entries[p.activeSlotIdx] ?? p.entries[0])?.site;
+      overlay.update({
+        width: w,
+        height: h,
+        sun: describeBodyOnScreen(orbitBodies.sunPosLocal, ORBIT_SUN_CORE_RADIUS, moonX, moonY, w, h, insets),
+        earth: describeBodyOnScreen(orbitBodies.earthPosLocal, ORBIT_EARTH_RADIUS, moonX, moonY, w, h, insets),
+        sunArrow: active
+          ? describeHeadingArrow(
+              active.center.latitude_deg,
+              active.center.longitude_east_deg,
+              orbitBodies.sunDirLocal,
+              w,
+              h,
+            )
+          : hiddenArrow,
+        earthArrow: active
+          ? describeHeadingArrow(
+              active.center.latitude_deg,
+              active.center.longitude_east_deg,
+              orbitBodies.earthDirLocal,
+              w,
+              h,
+            )
+          : hiddenArrow,
+        subSolar: describeSubPoint(orbitBodies.sunDirLocal, w, h),
+        subEarth: describeSubPoint(orbitBodies.earthDirLocal, w, h),
+      });
     };
 
     const syncMarkers = () => {
@@ -841,74 +1083,7 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
         }
       }
 
-      const poleUnit = latLonToSphereUnit(-90, 0);
-      const poleProj = projectWorldToOverlay(
-        _scratchV1.set(poleUnit.x * 1.04, poleUnit.y * 1.04, poleUnit.z * 1.04),
-        w,
-        h,
-      );
-
-      if (sunMarkerRef.current) {
-        const sU = latLonToSphereUnit(-73.5, p.subSolarLonDeg);
-        const sunProj = projectWorldToOverlay(
-          _scratchV1.set(sU.x * 1.04, sU.y * 1.04, sU.z * 1.04),
-          w,
-          h,
-        );
-        if (poleProj.visible && sunProj.visible) {
-          sunMarkerRef.current.setAttribute('visibility', 'visible');
-          const lineEl = sunMarkerRef.current.querySelector('line');
-          const dotEl = sunMarkerRef.current.querySelector('circle');
-          const textEl = sunMarkerRef.current.querySelector('text');
-          if (lineEl) {
-            lineEl.setAttribute('x1', poleProj.x.toFixed(1));
-            lineEl.setAttribute('y1', poleProj.y.toFixed(1));
-            lineEl.setAttribute('x2', sunProj.x.toFixed(1));
-            lineEl.setAttribute('y2', sunProj.y.toFixed(1));
-          }
-          if (dotEl) {
-            dotEl.setAttribute('cx', sunProj.x.toFixed(1));
-            dotEl.setAttribute('cy', sunProj.y.toFixed(1));
-          }
-          if (textEl) {
-            textEl.setAttribute('x', (sunProj.x + 8).toFixed(1));
-            textEl.setAttribute('y', (sunProj.y + 4).toFixed(1));
-          }
-        } else {
-          sunMarkerRef.current.setAttribute('visibility', 'hidden');
-        }
-      }
-
-      if (earthMarkerRef.current) {
-        const eU = latLonToSphereUnit(-73.5, p.subEarthLonDeg);
-        const earthProj = projectWorldToOverlay(
-          _scratchV1.set(eU.x * 1.04, eU.y * 1.04, eU.z * 1.04),
-          w,
-          h,
-        );
-        if (poleProj.visible && earthProj.visible) {
-          earthMarkerRef.current.setAttribute('visibility', 'visible');
-          const lineEl = earthMarkerRef.current.querySelector('line');
-          const dotEl = earthMarkerRef.current.querySelector('circle');
-          const textEl = earthMarkerRef.current.querySelector('text');
-          if (lineEl) {
-            lineEl.setAttribute('x1', poleProj.x.toFixed(1));
-            lineEl.setAttribute('y1', poleProj.y.toFixed(1));
-            lineEl.setAttribute('x2', earthProj.x.toFixed(1));
-            lineEl.setAttribute('y2', earthProj.y.toFixed(1));
-          }
-          if (dotEl) {
-            dotEl.setAttribute('cx', earthProj.x.toFixed(1));
-            dotEl.setAttribute('cy', earthProj.y.toFixed(1));
-          }
-          if (textEl) {
-            textEl.setAttribute('x', (earthProj.x + 8).toFixed(1));
-            textEl.setAttribute('y', (earthProj.y + 4).toFixed(1));
-          }
-        } else {
-          earthMarkerRef.current.setAttribute('visibility', 'hidden');
-        }
-      }
+      updateOrbitOverlay(w, h);
     };
 
     const updateReticleCoords = () => {
@@ -979,11 +1154,23 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
           }
         }
 
+        if (viewShiftPx !== viewShiftTargetPx) {
+          viewShiftPx = THREE.MathUtils.damp(viewShiftPx, viewShiftTargetPx, 6.5, dt);
+          if (isSoftwareGl || Math.abs(viewShiftPx - viewShiftTargetPx) < 0.5) {
+            viewShiftPx = viewShiftTargetPx;
+          } else {
+            renderDirty = true;
+          }
+          applyViewShift();
+        }
+
         const didMove = controls.update();
         if (didMove && !isSoftwareGl) {
           renderDirty = true;
         }
-        applySurfaceAndLighting();
+        if (applySurfaceAndLighting(dt)) {
+          renderDirty = true;
+        }
         renderer.render(scene, camera);
         syncMarkers();
 
@@ -1135,12 +1322,7 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
         requestRender();
       },
       flyToFullMoon: () => {
-        const w = mountEl.clientWidth || initW;
-        const h = mountEl.clientHeight || initH;
-        const aspect = w / Math.max(1, h);
-        const narrowScale = aspect < 0.9 ? Math.max(1.0, 0.88 / aspect) : 1.0;
-        _targetControlsLook.set(0, 0, 0);
-        _targetCamPos.set(-1.15 * narrowScale, 3.85 * narrowScale, 2.2 * narrowScale);
+        setSystemViewTarget();
         if (isSoftwareGl) {
           camera.position.copy(_targetCamPos);
           controls.target.copy(_targetControlsLook);
@@ -1201,6 +1383,7 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
       envTarget.dispose();
       starfield.geometry.dispose();
       (starfield.material as THREE.Material).dispose();
+      orbitBodies.dispose();
       renderer.dispose();
       threeCtrlRef.current = null;
     };
@@ -1285,18 +1468,10 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
           aria-label={`3D Moon site markers for ${entries.map((e) => `${e.label}: ${e.site.name}`).join(', ')}`}
         >
           {hasStarted && (
-            <g pointerEvents="none" opacity={0.85}>
-              <g ref={sunMarkerRef} visibility="hidden">
-                <line stroke="#ffffff" strokeWidth={1.2} strokeDasharray="4 3" />
-                <circle r={3.8} fill="#ffffff" stroke="#000000" strokeWidth={1.2} />
-                <text className="vp-vec-sun">Sun</text>
-              </g>
-              <g ref={earthMarkerRef} visibility="hidden">
-                <line stroke="#a1a1aa" strokeWidth={1.2} strokeDasharray="2 3" />
-                <circle r={3.8} fill="#a1a1aa" stroke="#000000" strokeWidth={1.2} />
-                <text className="vp-vec-earth">Earth</text>
-              </g>
-            </g>
+            <OrbitBodiesOverlay
+              ref={orbitOverlayRef}
+              onShowBodies={() => threeCtrlRef.current?.flyToFullMoon()}
+            />
           )}
 
           {hasStarted &&
@@ -1443,6 +1618,10 @@ export const LunarViewport: React.FC<LunarViewportProps> = ({
             </g>
           )}
         </svg>
+      )}
+
+      {hasStarted && mode === '3d' && (
+        <OrbitSkyLegend sun={bodyTargets?.sun ?? null} earth={bodyTargets?.earth ?? null} />
       )}
 
       {hasStarted && mode === '3d' && (

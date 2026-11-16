@@ -23,7 +23,7 @@ const RAY_DISTANCES_KM = [
   94.0, 107.0, 120.0,
 ];
 
-function enuToMoonMeUnit(
+export function enuToMoonMeUnit(
   latDeg: number,
   lonEastDeg: number,
   azDeg: number,
@@ -64,7 +64,7 @@ function enuToMoonMeUnit(
   ];
 }
 
-function moonMeUnitToEnuAzEl(
+export function moonMeUnitToEnuAzEl(
   vec: [number, number, number],
   latDeg: number,
   lonEastDeg: number,
