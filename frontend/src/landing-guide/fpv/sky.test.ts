@@ -13,9 +13,26 @@ import {
   snapToShadowTexels,
   SUN_INTENSITY,
 } from './sky';
-import { buildEarthTexture, EARTH_ANGULAR_DIAMETER_DEG } from './skyEarth';
+import { EasedDirection, EasedScalar, EasedSun, easeAlpha, LIGHT_EASE_TAU_S, LIGHT_SNAP_ANGLE_DEG } from './skyEase';
+import { buildEarthTexture, EARTH_ANGULAR_DIAMETER_DEG, EARTH_DRAWN_DIAMETER_DEG, EARTH_DRAWN_SIZE_FACTOR } from './skyEarth';
 import { envRadiance } from './skyEnv';
+import {
+  earthLitFraction,
+  earthshineIntensity,
+  groundBounce,
+  HELMET_LAMP_INTENSITY,
+  HELMET_LAMP_REACH_M,
+  lowSunFactor,
+  nightFactor,
+  NIGHT_HEMI_SKY,
+  shadowFade,
+  starGain,
+  sunGate,
+  sunGlowGain,
+} from './skyNight';
+import { buildStarData } from './skyStars';
 import { SUN_QUAD_RADIUS_PX, sunProfile } from './skySun';
+import { discVisibleFraction, findGroundHeight, GROUND_OBJECT_NAME, registerGroundHeight, skylineElevation } from './terrainSkyline';
 
 const DEG = Math.PI / 180;
 const dirOf = (azDeg: number, elDeg: number) =>
@@ -221,8 +238,291 @@ describe('createLunarSky', () => {
     expect(earth.visible).toBe(true);
     const dist = earth.position.distanceTo(camera.position);
     const angularDiameter = (2 * Math.asin(earth.scale.x / dist)) / DEG;
-    expect(angularDiameter).toBeCloseTo(EARTH_ANGULAR_DIAMETER_DEG, 2);
+    // Drawn at most twice its true size, and the factor is exported for the UI to mention.
+    expect(EARTH_DRAWN_SIZE_FACTOR).toBeGreaterThanOrEqual(1);
+    expect(EARTH_DRAWN_SIZE_FACTOR).toBeLessThanOrEqual(2);
+    expect(EARTH_DRAWN_DIAMETER_DEG).toBeCloseTo(EARTH_ANGULAR_DIAMETER_DEG * EARTH_DRAWN_SIZE_FACTOR, 6);
+    expect(angularDiameter).toBeCloseTo(EARTH_DRAWN_DIAMETER_DEG, 2);
+    // Sinking: still drawn while part of the disc can clear the horizon, gone well below it.
+    sky.setEarthDirection(dirOf(30, 1));
+    sky.setEarthDirection(dirOf(30, -1));
+    for (let i = 0; i < 100; i++) sky.update?.({ dt: 0.05, elapsed: 0, camera });
+    expect(earth.visible).toBe(true);
+    sky.setEarthDirection(dirOf(30, -9));
+    for (let i = 0; i < 100; i++) sky.update?.({ dt: 0.05, elapsed: 0, camera });
+    expect(earth.visible).toBe(false);
     sky.dispose();
+  });
+});
+
+describe('lighting easing', () => {
+  it('is frame-rate independent for directions and scalars', () => {
+    const run = (steps: number, total: number) => {
+      const d = new EasedDirection(dirOf(252, 10));
+      d.set(dirOf(252, 10));
+      d.set(dirOf(240, 2));
+      const s = new EasedScalar(1);
+      s.set(1);
+      s.set(0.2);
+      for (let i = 0; i < steps; i++) {
+        d.step(total / steps);
+        s.step(total / steps);
+      }
+      return { dir: d.value.clone(), scalar: s.value, left: d.value.angleTo(d.target) };
+    };
+    const a = run(1, 0.3);
+    const b = run(18, 0.3);
+    const c = run(77, 0.3);
+    expect(a.dir.angleTo(b.dir)).toBeLessThan(1e-6);
+    expect(a.dir.angleTo(c.dir)).toBeLessThan(1e-6);
+    expect(a.scalar).toBeCloseTo(b.scalar, 9);
+    expect(a.scalar).toBeCloseTo(c.scalar, 9);
+    // After one time constant 1/e of the way is left, whatever the frame time.
+    const start = dirOf(252, 10).angleTo(dirOf(240, 2));
+    expect(run(24, LIGHT_EASE_TAU_S).left / start).toBeCloseTo(Math.exp(-1), 4);
+    expect(easeAlpha(0)).toBe(0);
+    expect(easeAlpha(-1)).toBe(0);
+    expect(easeAlpha(Number.NaN)).toBe(0);
+    expect(LIGHT_EASE_TAU_S).toBeGreaterThanOrEqual(0.3);
+    expect(LIGHT_EASE_TAU_S).toBeLessThanOrEqual(0.5);
+  });
+
+  it('snaps on the first value and on big jumps, eases small steps', () => {
+    const d = new EasedDirection(dirOf(0, 45));
+    // First call: applied at once, however far it is.
+    expect(d.set(dirOf(252, 10))).toBe(true);
+    expect(d.value.angleTo(dirOf(252, 10))).toBeLessThan(1e-9);
+    // Playback step (0.5° of azimuth): eased.
+    expect(d.set(dirOf(251.5, 10))).toBe(false);
+    expect(d.value.angleTo(dirOf(252, 10))).toBeLessThan(1e-9);
+    d.step(0.016);
+    const moved = d.value.angleTo(dirOf(252, 10));
+    expect(moved).toBeGreaterThan(0);
+    expect(moved).toBeLessThan(0.5 * DEG);
+    for (let i = 0; i < 400; i++) d.step(0.016);
+    expect(d.value.angleTo(dirOf(251.5, 10))).toBeLessThan(1e-4);
+    expect(d.value.length()).toBeCloseTo(1, 9);
+    // Site switch: more than the snap angle away.
+    expect(d.set(dirOf(251.5 + LIGHT_SNAP_ANGLE_DEG + 3, 10))).toBe(true);
+    expect(d.value.angleTo(d.target)).toBe(0);
+    // Garbage is ignored.
+    expect(d.set(new THREE.Vector3(Number.NaN, 0, 0))).toBe(false);
+    expect(d.set(new THREE.Vector3(0, 0, 0))).toBe(false);
+    expect(Number.isFinite(d.value.x)).toBe(true);
+  });
+
+  it('snaps the illumination together with a direction jump', () => {
+    const sun = new EasedSun(dirOf(0, 10));
+    sun.setDirection(dirOf(252, 11.6));
+    sun.setIllumination(1);
+    expect(sun.illumination).toBe(1);
+    // Playback: the new fraction is eased.
+    sun.setDirection(dirOf(251.5, 11.5));
+    sun.setIllumination(0.4);
+    expect(sun.illumination).toBe(1);
+    sun.step(0.1);
+    expect(sun.illumination).toBeLessThan(1);
+    expect(sun.illumination).toBeGreaterThan(0.4);
+    // Site switch (Sun 90° away): direction and illumination change at once.
+    sun.setDirection(dirOf(160, -9));
+    sun.setIllumination(0);
+    expect(sun.illumination).toBe(0);
+    expect(sun.direction.angleTo(dirOf(160, -9))).toBeLessThan(1e-9);
+    // Out-of-range fractions are clamped.
+    sun.setIllumination(7);
+    for (let i = 0; i < 400; i++) sun.step(0.016);
+    expect(sun.illumination).toBe(1);
+  });
+});
+
+describe('mission illumination', () => {
+  const fakeRenderer = {} as THREE.WebGLRenderer;
+  const camera = new THREE.PerspectiveCamera(60, 2, 0.1, 6000);
+  camera.position.set(3, 1.7, 4);
+  camera.updateMatrixWorld();
+  const settle = (sky: ReturnType<typeof createLunarSky>) => {
+    for (let i = 0; i < 200; i++) sky.update?.({ dt: 0.05, elapsed: i * 0.05, camera });
+  };
+
+  it('keeps every night term exactly off in daylight', () => {
+    expect(nightFactor(1)).toBe(0);
+    expect(starGain(1)).toBe(0);
+    expect(sunGlowGain(1)).toBe(1);
+    expect(sunGate(1)).toBe(1);
+    expect(groundBounce(Math.sin(10 * DEG))).toBe(1);
+    expect(groundBounce(Math.sin(11.6 * DEG))).toBe(1);
+    expect(lowSunFactor(Math.sin(10 * DEG))).toBe(0);
+    expect(lowSunFactor(Math.sin(11.6 * DEG))).toBe(0);
+    expect(shadowFade(Math.sin(11.6 * DEG))).toBe(1);
+
+    const scene = new THREE.Scene();
+    const sky = createLunarSky({ renderer: fakeRenderer, scene, lowPower: true });
+    sky.setSunDirection(dirOf(252, 11.6));
+    sky.setEarthDirection(dirOf(135, 12));
+    sky.setSunIllumination?.(1);
+    settle(sky);
+    expect(sky.sunLight.intensity).toBeCloseTo(SUN_INTENSITY, 9);
+    const lamp = sky.object.getObjectByName('helmet-lamp') as THREE.SpotLight;
+    const earthshine = sky.object.getObjectByName('earthshine') as THREE.DirectionalLight;
+    const hemi = sky.object.getObjectByName('fill') as THREE.HemisphereLight;
+    // The lamp and the earthshine stay in the scene (no shader recompiles) but give no light at all.
+    expect(lamp.visible).toBe(true);
+    expect(lamp.intensity).toBe(0);
+    expect(earthshine.intensity).toBe(0);
+    expect(sky.object.getObjectByName('stars')?.visible).toBe(false);
+    expect(sky.object.getObjectByName('sun-glow')?.visible).toBe(true);
+    // The tuned daylight fill, untouched.
+    expect(hemi.color.r).toBeCloseTo(0.1, 9);
+    expect(hemi.groundColor.r).toBeCloseTo(0.49, 9);
+    sky.dispose();
+  });
+
+  it('scales everything Sun-driven to zero at night and brings in the night look', () => {
+    const scene = new THREE.Scene();
+    const sky = createLunarSky({ renderer: fakeRenderer, scene, lowPower: true });
+    sky.setSunDirection(dirOf(285, -5.7));
+    sky.setEarthDirection(dirOf(325, 12.4));
+    sky.setSunIllumination?.(0);
+    // The first state is applied at once (no fade from a default daylight).
+    expect(sky.sunLight.intensity).toBe(0);
+    settle(sky);
+    expect(sky.sunLight.intensity).toBe(0);
+    expect(sky.object.getObjectByName('sun-glow')?.visible).toBe(false);
+    const hemi = sky.object.getObjectByName('fill') as THREE.HemisphereLight;
+    // No Sun bounce left in the fill: only the dim night ambient.
+    expect(hemi.color.r).toBeCloseTo(NIGHT_HEMI_SKY[0], 9);
+    expect(hemi.groundColor.r).toBeLessThan(0.1);
+    const lamp = sky.object.getObjectByName('helmet-lamp') as THREE.SpotLight;
+    expect(lamp.intensity).toBeCloseTo(HELMET_LAMP_INTENSITY, 9);
+    expect(lamp.distance).toBe(HELMET_LAMP_REACH_M);
+    expect(lamp.distance).toBeGreaterThanOrEqual(20);
+    expect(lamp.distance).toBeLessThanOrEqual(30);
+    expect(lamp.castShadow).toBe(false);
+    // Cool white, and it follows the camera.
+    expect(lamp.color.b).toBeGreaterThan(lamp.color.r);
+    expect(lamp.position.distanceTo(camera.position)).toBeLessThan(0.5);
+    expect(sky.object.getObjectByName('stars')?.visible).toBe(true);
+    // Earth above the horizon: a weak bluish fill from its direction.
+    const earthshine = sky.object.getObjectByName('earthshine') as THREE.DirectionalLight;
+    expect(earthshine.intensity).toBeGreaterThan(0);
+    expect(earthshine.intensity).toBeLessThan(SUN_INTENSITY * 0.25);
+    expect(earthshine.color.b).toBeGreaterThan(earthshine.color.r);
+    expect(earthshine.position.clone().normalize().dot(dirOf(325, 12.4))).toBeGreaterThan(0.9999);
+    // Earth below the horizon (permanently shadowed floor): no earthshine, the lamp stays.
+    sky.setEarthDirection(dirOf(325, -9));
+    settle(sky);
+    expect(earthshine.intensity).toBe(0);
+    expect(lamp.intensity).toBeCloseTo(HELMET_LAMP_INTENSITY, 9);
+    sky.dispose();
+  });
+
+  it('fades between day and night over a few tenths of a second', () => {
+    const scene = new THREE.Scene();
+    const sky = createLunarSky({ renderer: fakeRenderer, scene, lowPower: true });
+    sky.setSunDirection(dirOf(303, 0.6));
+    sky.setSunIllumination?.(1);
+    sky.setSunDirection(dirOf(302.5, 0.4));
+    sky.setSunIllumination?.(0);
+    // Nothing jumps when the new state arrives...
+    expect(sky.sunLight.intensity).toBeCloseTo(SUN_INTENSITY, 9);
+    sky.update?.({ dt: 0.1, elapsed: 0.1, camera });
+    // ...it moves a little every frame...
+    expect(sky.sunLight.intensity).toBeLessThan(SUN_INTENSITY);
+    expect(sky.sunLight.intensity).toBeGreaterThan(SUN_INTENSITY * 0.5);
+    const lamp = sky.object.getObjectByName('helmet-lamp') as THREE.SpotLight;
+    expect(lamp.intensity).toBe(0);
+    // ...and gets there.
+    settle(sky);
+    expect(sky.sunLight.intensity).toBe(0);
+    expect(lamp.intensity).toBeCloseTo(HELMET_LAMP_INTENSITY, 9);
+    const toLight = sky.sunLight.position.clone().sub(sky.sunLight.target.position).normalize();
+    expect(toLight.dot(dirOf(302.5, 0.4))).toBeGreaterThan(0.999999);
+    sky.dispose();
+  });
+
+  it('fades the cast shadows out before the Sun reaches the horizon (full shadows from ~2° up)', () => {
+    expect(shadowFade(Math.sin(4 * DEG))).toBe(1);
+    expect(shadowFade(Math.sin(1.2 * DEG))).toBeGreaterThan(0);
+    expect(shadowFade(Math.sin(1.2 * DEG))).toBeLessThan(1);
+    expect(shadowFade(0)).toBe(0);
+    expect(shadowFade(Math.sin(-9 * DEG))).toBe(0);
+    const scene = new THREE.Scene();
+    const sky = createLunarSky({ renderer: fakeRenderer, scene, lowPower: false });
+    sky.setSunDirection(dirOf(252, 8));
+    sky.setSunIllumination?.(1);
+    expect(sky.sunLight.shadow.intensity).toBe(1);
+    expect(sky.sunLight.shadow.autoUpdate).toBe(true);
+    // Sun on / under the horizon: the shadow box stays sane and the shadow pass is skipped.
+    for (const el of [1.5, 0, -0.5, -9]) {
+      const b = computeShadowBounds(dirOf(252, el));
+      expect(Number.isFinite(b.top) && Number.isFinite(b.bottom)).toBe(true);
+      expect(b.top - b.bottom).toBeGreaterThan(20);
+      expect(b.top - b.bottom).toBeLessThan(60);
+    }
+    sky.setSunDirection(dirOf(160, -9));
+    sky.setSunIllumination?.(0);
+    expect(sky.sunLight.castShadow).toBe(true);
+    expect(sky.sunLight.shadow.intensity).toBe(0);
+    expect(sky.sunLight.shadow.autoUpdate).toBe(false);
+    sky.dispose();
+  });
+
+  it('gives a fuller Earth more earthshine and none by day', () => {
+    const sunBehind = dirOf(140, -5);
+    const earth = dirOf(320, 15);
+    expect(earthLitFraction(sunBehind, earth)).toBeGreaterThan(0.9);
+    expect(earthLitFraction(dirOf(322, 0), earth)).toBeLessThan(0.05);
+    expect(earthshineIntensity(0, sunBehind, earth)).toBeGreaterThan(earthshineIntensity(0, dirOf(322, 0), earth));
+    expect(earthshineIntensity(1, sunBehind, earth)).toBe(0);
+    expect(earthshineIntensity(0, sunBehind, dirOf(320, -4))).toBe(0);
+  });
+});
+
+describe('star field and Sun clearance', () => {
+  it('builds a deterministic set of unit directions above the minimum elevation', () => {
+    const a = buildStarData(500);
+    const b = buildStarData(500);
+    expect(a.count).toBe(500);
+    expect(Array.from(a.positions.slice(0, 60))).toEqual(Array.from(b.positions.slice(0, 60)));
+    let bright = 0;
+    for (let i = 0; i < a.count; i++) {
+      const x = a.positions[i * 3];
+      const y = a.positions[i * 3 + 1];
+      const z = a.positions[i * 3 + 2];
+      expect(Math.hypot(x, y, z)).toBeCloseTo(1, 5);
+      expect(y).toBeGreaterThan(Math.sin(-15 * DEG));
+      if (a.attrs[i * 3] > 0.7) bright++;
+    }
+    // Mostly faint stars.
+    expect(bright).toBeLessThan(a.count * 0.2);
+    expect(bright).toBeGreaterThan(0);
+  });
+
+  it('measures how much of the Sun disc clears the terrain skyline', () => {
+    // A ridge 100 m away, 5 m above the eye: its crest stands at atan(5/100) ≈ 2.86°.
+    const ridge = (x: number, _z: number) => (x > 100 && x < 140 ? 6.7 : 0);
+    const skyline = skylineElevation(ridge, 0, 1.7, 0, 1, 0);
+    expect(skyline / DEG).toBeGreaterThan(2.3);
+    expect(skyline / DEG).toBeLessThan(2.9);
+    // Looking the other way the plain is at the horizon (just below the eye level).
+    const flat = skylineElevation(ridge, 0, 1.7, 0, -1, 0);
+    expect(flat / DEG).toBeLessThan(0);
+    expect(flat / DEG).toBeGreaterThan(-0.1);
+    const r = 0.35 * DEG;
+    expect(discVisibleFraction(10 * DEG, r, skyline)).toBe(1);
+    expect(discVisibleFraction(1 * DEG, r, skyline)).toBe(0);
+    const half = discVisibleFraction(skyline, r, skyline);
+    expect(half).toBeCloseTo(0.5, 6);
+
+    // The sky finds the ground's height function through the scene graph.
+    const scene = new THREE.Scene();
+    expect(findGroundHeight(scene)).toBeNull();
+    const ground = new THREE.Object3D();
+    ground.name = GROUND_OBJECT_NAME;
+    scene.add(ground);
+    expect(findGroundHeight(scene)).toBeNull();
+    registerGroundHeight(ground, ridge);
+    expect(findGroundHeight(scene)).toBe(ridge);
   });
 });
 

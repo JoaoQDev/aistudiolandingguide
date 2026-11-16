@@ -19,6 +19,9 @@ import * as THREE from 'three';
  *   backlit props do not throw long dark wedges across the plain (contact darkening is drawn by
  *   the props' own decals);
  * - a faint lavender tint in shade;
+ * - mission lighting: the Sun-only terms (sheen, fill, shadow hiding) are gated by `uSunOn`, so
+ *   with the Sun gone the other lights (helmet lamp, earthshine) get the plain lunar diffuse
+ *   response only, and `uNightAmbient` keeps the plain barely visible at night;
  * - near the camera only, a soft bounce fill on large self-shadowed steep faces (the valley
  *   walls), so standing at their foot they show relief instead of a black void, while the same
  *   faces seen from afar keep the reference's black ridge band.
@@ -89,6 +92,10 @@ export interface RegolithUniforms {
    * distances (m) over which it fades out, so far faces (the ridge band) stay black.
    */
   uWallFill: { value: THREE.Vector3 };
+  /** 1 while any of the Sun's disc is up, 0 at night: gates the Sun-only terms. */
+  uSunOn: { value: number };
+  /** Night ambient irradiance factor (× albedo); black in daylight. */
+  uNightAmbient: { value: THREE.Color };
 }
 
 const f = (v: number) => (Number.isInteger(v) ? `${v}.0` : `${v}`);
@@ -185,6 +192,8 @@ uniform vec2 uIsoK;
 uniform float uShadowStrength;
 uniform vec3 uShadowFade;
 uniform vec3 uWallFill;
+uniform float uSunOn;
+uniform vec3 uNightAmbient;
 varying vec3 vLunarWorld;
 varying vec3 vLunarNormalW;
 float lunarOcc = 1.0;
@@ -216,7 +225,7 @@ void RE_Direct_Lunar( const in IncidentLight directLight, const in vec3 geometry
   // Compressed response: grazing-lit flats stay bright, slopes facing away fall into shade.
   float F = 2.0 * m / ( m + uPhotK );
   vec3 sunV = normalize( mat3( viewMatrix ) * uSunDirW );
-  float isSun = smoothstep( 0.9, 0.98, dot( directLight.direction, sunV ) );
+  float isSun = uSunOn * smoothstep( 0.9, 0.98, dot( directLight.direction, sunV ) );
   vec3 ray = -geometryViewDir;
   vec3 upV = normalize( viewMatrix[ 1 ].xyz );
   // Broad forward-scatter halo around the Sun direction (strongest near the horizon).
@@ -270,7 +279,7 @@ void RE_Direct_Lunar( const in IncidentLight directLight, const in vec3 geometry
           // Shadow hiding: near zero phase angle (Sun behind the viewer) the shadowed side of each
           // pit and clod faces away from the camera, so front-lit ground reads bright and smooth.
           '  vec3 rayW = ( vLunarWorld - cameraPosition ) / max( lunarDist, 1e-3 );',
-          '  lunarHide = smoothstep( 0.6, 0.97, dot( -rayW, normalize( uSunDirW ) ) );',
+          '  lunarHide = uSunOn * smoothstep( 0.6, 0.97, dot( -rayW, normalize( uSunDirW ) ) );',
           '  lunarOcc = mix( lunarOcc, 1.0, 0.8 * lunarHide );',
           '}',
           'lunarShadowK = uShadowStrength * mix( 1.0, uShadowFade.z, smoothstep( uShadowFade.x, uShadowFade.y, lunarDist ) );',
@@ -300,7 +309,12 @@ void RE_Direct_Lunar( const in IncidentLight directLight, const in vec3 geometry
       .replace('#include <lights_fragment_begin>', patchedLightsBegin(THREE.ShaderChunk.lights_fragment_begin))
       .replace(
         '#include <lights_fragment_end>',
-        '#include <lights_fragment_end>\nreflectedLight.indirectDiffuse *= uShadeTint * ( uAmbientGain * lunarOcc * mix( 0.12, 1.0, lunarMacroLit ) );',
+        [
+          '#include <lights_fragment_end>',
+          'reflectedLight.indirectDiffuse *= uShadeTint * ( uAmbientGain * lunarOcc * mix( 0.12, 1.0, lunarMacroLit ) );',
+          // Night floor (starlight stand-in): flat, so the plain reads as a surface under the stars.
+          'reflectedLight.indirectDiffuse += uNightAmbient * material.diffuseColor * mix( 0.6, 1.0, lunarOcc );',
+        ].join('\n'),
       );
   };
 }

@@ -1,6 +1,11 @@
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { createLunarSky } from './sky';
+import { NIGHT_REGOLITH_AMBIENT } from './skyNight';
+import { createLunarGround, GROUND_SHADOW_LOW_SUN, GROUND_SHADOW_TUNED, groundShadowLook } from './terrain';
 import { BASE_PADS, KNOLLS, createHeightField } from './terrainHeight';
-import { buildDetailGLSL, type RegolithScale } from './terrainShader';
+import { buildDetailGLSL, type RegolithScale, type RegolithUniforms } from './terrainShader';
+import { findGroundHeight, skylineElevation } from './terrainSkyline';
 import { generateRegolithTexture } from './terrainTexture';
 
 /** Height of the mesh triangle under (x, z) computed directly from the built mesh data. */
@@ -235,6 +240,125 @@ describe('regolith shader', () => {
     expect(glsl).toContain('dFdx(xz)');
     expect(glsl).toContain('uIsoK');
     expect(glsl).not.toMatch(/texture2D\(/);
+  });
+});
+
+describe('ground mission lighting', () => {
+  const DEG = Math.PI / 180;
+  const dirOf = (azDeg: number, elDeg: number) =>
+    new THREE.Vector3(Math.cos(elDeg * DEG) * Math.sin(azDeg * DEG), Math.sin(elDeg * DEG), -Math.cos(elDeg * DEG) * Math.cos(azDeg * DEG));
+
+  /** Runs the material's shader patch on the stock standard shader and returns what it produced. */
+  const compile = (ground: ReturnType<typeof createLunarGround>) => {
+    const material = (ground.object as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    const shader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: THREE.ShaderLib.standard.vertexShader,
+      fragmentShader: THREE.ShaderLib.standard.fragmentShader,
+    };
+    material.onBeforeCompile(shader as unknown as THREE.WebGLProgramParametersWithUniforms, {} as THREE.WebGLRenderer);
+    return { uniforms: shader.uniforms as unknown as RegolithUniforms, fragment: shader.fragmentShader };
+  };
+
+  it('keeps the tuned received shadows by day and lengthens them for a low Sun', () => {
+    for (const el of [10, 11.6, 12, 40]) expect(groundShadowLook(Math.sin(el * DEG))).toEqual(GROUND_SHADOW_TUNED);
+    for (const el of [3, 1.5, 0, -9]) expect(groundShadowLook(Math.sin(el * DEG))).toEqual(GROUND_SHADOW_LOW_SUN);
+    const mid = groundShadowLook(Math.sin(6 * DEG));
+    expect(mid.strength).toBeGreaterThan(GROUND_SHADOW_TUNED.strength);
+    expect(mid.strength).toBeLessThan(GROUND_SHADOW_LOW_SUN.strength);
+    expect(mid.fadeEnd).toBeGreaterThan(GROUND_SHADOW_TUNED.fadeEnd);
+  });
+
+  it('scales the Sun-only shading to zero at night and eases like the sky', () => {
+    const ground = createLunarGround({ seed: 7, lowPower: true });
+    const { uniforms, fragment } = compile(ground);
+    // The patch still finds its anchors in this three.js version and gates the Sun-only terms.
+    expect(fragment).toContain('RE_Direct_Lunar');
+    expect(fragment).toContain('float isSun = uSunOn *');
+    expect(fragment).toContain('lunarHide = uSunOn *');
+    expect(fragment).toContain('uNightAmbient * material.diffuseColor');
+
+    // Default daylight state (drawn Sun ≈ 11.6°): the tuned look, no night term at all.
+    const day = dirOf(252, 11.6);
+    ground.setSunDirection?.(day);
+    ground.setSunIllumination?.(1);
+    expect(uniforms.uSunDirW.value.angleTo(day)).toBeLessThan(1e-9);
+    expect(uniforms.uSunOn.value).toBe(1);
+    expect(uniforms.uNightAmbient.value.getHex()).toBe(0x000000);
+    expect(uniforms.uShadowStrength.value).toBe(GROUND_SHADOW_TUNED.strength);
+    expect(uniforms.uShadowFade.value.toArray()).toEqual([GROUND_SHADOW_TUNED.fadeStart, GROUND_SHADOW_TUNED.fadeEnd, GROUND_SHADOW_TUNED.farFactor]);
+
+    // The sky gets the same calls and the same frame times: both must hold the same Sun at every frame.
+    const scene = new THREE.Scene();
+    scene.add(ground.object);
+    const sky = createLunarSky({ renderer: {} as THREE.WebGLRenderer, scene, lowPower: true });
+    sky.setSunDirection(day);
+    sky.setSunIllumination?.(1);
+    const camera = new THREE.PerspectiveCamera(60, 2, 0.1, 6000);
+    camera.position.set(7, 1.7, 1);
+    camera.updateMatrixWorld();
+    const toLight = new THREE.Vector3();
+    const steps: Array<[THREE.Vector3, number]> = [
+      [dirOf(251.5, 11.4), 1],
+      [dirOf(251, 6), 0.7],
+      [dirOf(250.5, 0.2), 0.3],
+      [dirOf(250, -0.6), 0],
+    ];
+    let t = 0;
+    for (const [dir, f] of steps) {
+      sky.setSunDirection(dir);
+      ground.setSunDirection?.(dir);
+      sky.setSunIllumination?.(f);
+      ground.setSunIllumination?.(f);
+      for (const dt of [0.016, 0.033, 0.05, 0.008, 0.07]) {
+        t += dt;
+        const frame = { dt, elapsed: t, camera };
+        ground.update?.(frame);
+        sky.update?.(frame);
+        toLight.copy(sky.sunLight.position).sub(sky.sunLight.target.position).normalize();
+        expect(toLight.angleTo(uniforms.uSunDirW.value)).toBeLessThan(1e-6);
+        // Still on its way: easing, not jumping.
+        expect(uniforms.uSunDirW.value.angleTo(dir)).toBeGreaterThan(0);
+      }
+    }
+    for (let i = 0; i < 300; i++) {
+      const frame = { dt: 0.05, elapsed: (t += 0.05), camera };
+      ground.update?.(frame);
+      sky.update?.(frame);
+    }
+    // Night at the site: no Sun-only shading, the dim ambient is in.
+    expect(sky.sunLight.intensity).toBe(0);
+    expect(uniforms.uSunOn.value).toBe(0);
+    expect(uniforms.uNightAmbient.value.g).toBeCloseTo(NIGHT_REGOLITH_AMBIENT[1], 9);
+    expect(uniforms.uSunDirW.value.angleTo(dirOf(250, -0.6))).toBeLessThan(1e-4);
+
+    // A site switch (Sun far away in azimuth) is applied at once on both sides.
+    const other = dirOf(100, 8);
+    sky.setSunDirection(other);
+    ground.setSunDirection?.(other);
+    sky.setSunIllumination?.(1);
+    ground.setSunIllumination?.(1);
+    expect(uniforms.uSunDirW.value.angleTo(other)).toBeLessThan(1e-9);
+    expect(uniforms.uSunOn.value).toBe(1);
+    expect(uniforms.uNightAmbient.value.getHex()).toBe(0x000000);
+    expect(sky.sunLight.intensity).toBeCloseTo(Math.PI, 9);
+
+    // The sky can read the terrain skyline through the scene (Sun disc clearance)...
+    const heightAt = findGroundHeight(scene);
+    expect(heightAt).toBe(ground.heightAt);
+    const t0 = performance.now();
+    let worst = -90;
+    for (let az = 0; az < 360; az += 10) {
+      const e = skylineElevation(ground.heightAt, 7, ground.heightAt(7, 1) + 1.7, 1, Math.sin(az * DEG), -Math.cos(az * DEG)) / DEG;
+      expect(e).toBeGreaterThan(-3);
+      expect(e).toBeLessThan(12);
+      worst = Math.max(worst, e);
+    }
+    console.info(`skyline scan: ${((performance.now() - t0) / 36).toFixed(3)} ms per azimuth, highest ${worst.toFixed(1)}°`);
+    // ...until the ground is disposed.
+    sky.dispose();
+    ground.dispose();
+    expect(findGroundHeight(scene)).toBeNull();
   });
 });
 

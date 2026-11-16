@@ -9,7 +9,9 @@ import * as THREE from 'three';
  * t30): a ~10 px saturated white core and a smooth exponential halo, no streaks. The reference halo
  * is slightly lopsided — its tail reaches ~90 px to the right of / below the disc but only ~60 px
  * to the left and above — so the falloff length and fade window depend gently on screen direction.
- * The quad is depth-tested at ~0.97 × camera.far, so terrain and props occlude it.
+ * The quad is depth-tested at ~0.97 × camera.far, so terrain and props occlude it: a low Sun sinks
+ * behind the ridge line pixel by pixel. The halo is a glare, not an object, so the sky also fades it
+ * (`setGain`) with the share of the disc still clear of the terrain and with the illumination.
  */
 
 /** Focal length in px of the reference viewport (940 px tall, 60° vertical FOV). */
@@ -17,6 +19,8 @@ export const SUN_REF_FOCAL_PX = 470 / Math.tan((30 * Math.PI) / 180);
 /** Quad half-size in reference px (must cover the whole halo in every direction). */
 export const SUN_QUAD_RADIUS_PX = 120;
 export const SUN_CORE_RADIUS_PX = 5.0;
+/** Angular radius (radians) of the drawn disc. */
+export const SUN_CORE_RADIUS_RAD = Math.atan(SUN_CORE_RADIUS_PX / SUN_REF_FOCAL_PX);
 const GLOW_PEAK = 0.4; // display value of the halo right outside the core (~100/255)
 const GLOW_FALLOFF_PX = 22;
 const GLOW_FADE_START_PX = 45;
@@ -70,6 +74,8 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   uniform float uQuadPx;
   uniform float uCorePx;
+  uniform float uCoreGain;
+  uniform float uGlowGain;
   varying vec2 vUv;
   void main() {
     float len = length( vUv );
@@ -81,7 +87,7 @@ const fragmentShader = /* glsl */ `
     float fadeScale = 1.0 + ${GLOW_FADE_SKEW_Y.toFixed(4)} * dir.y;
     float glow = ${GLOW_PEAK.toFixed(4)} * exp( -( r - ( uCorePx + 0.8 ) ) / ( ${GLOW_FALLOFF_PX.toFixed(2)} * lengthScale ) )
       * ( 1.0 - smoothstep( ${GLOW_FADE_START_PX.toFixed(1)} * fadeScale, ${GLOW_FADE_END_PX.toFixed(1)} * fadeScale, r ) );
-    float v = min( 1.0, core + glow );
+    float v = min( 1.0, core * uCoreGain + glow * uGlowGain );
     if ( v < 0.0015 ) discard;
     // Written straight to the sRGB canvas (no tone mapping / colour-space conversion):
     // the profile is already in display values, and additive blending keeps it a light source.
@@ -92,6 +98,8 @@ const fragmentShader = /* glsl */ `
 export interface SunSprite {
   mesh: THREE.Mesh;
   setDirection(dir: THREE.Vector3): void;
+  /** Brightness of the disc core and of the halo, each 0..1 (1, 1 = the tuned daylight sprite). */
+  setGain(core: number, glow: number): void;
   update(camera: THREE.PerspectiveCamera): void;
   dispose(): void;
 }
@@ -105,6 +113,8 @@ export function createSunSprite(): SunSprite {
       uTanR: { value: SUN_QUAD_RADIUS_PX / SUN_REF_FOCAL_PX },
       uQuadPx: { value: SUN_QUAD_RADIUS_PX },
       uCorePx: { value: SUN_CORE_RADIUS_PX },
+      uCoreGain: { value: 1 },
+      uGlowGain: { value: 1 },
     },
     vertexShader,
     fragmentShader,
@@ -125,6 +135,14 @@ export function createSunSprite(): SunSprite {
     mesh,
     setDirection(dir) {
       (material.uniforms.uDir.value as THREE.Vector3).copy(dir).normalize();
+    },
+    setGain(core, glow) {
+      const c = Math.min(1, Math.max(0, core));
+      const g = Math.min(1, Math.max(0, glow));
+      material.uniforms.uCoreGain.value = c;
+      material.uniforms.uGlowGain.value = g;
+      // Night: nothing to draw.
+      mesh.visible = c > 0.002 || g > 0.002;
     },
     update(camera) {
       material.uniforms.uDist.value = camera.far * 0.97;

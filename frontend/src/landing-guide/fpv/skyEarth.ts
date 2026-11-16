@@ -2,13 +2,23 @@ import * as THREE from 'three';
 
 /**
  * Small procedural Earth for the lunar sky. Purely illustrative artwork (procedural continents and
- * clouds, no real geography). It keeps the true apparent size seen from the Moon (~1.9°), is lit by
- * the same Sun direction as the scene (so its phase follows the Sun) and is depth-tested so the
- * horizon and props hide it when it is low or below the horizon.
+ * clouds, no real geography). It is lit by the same Sun direction as the scene, so its phase
+ * follows the Sun (a thin crescent when the Sun stands near it, nearly full when the Sun is on
+ * the far side of the sky), and it is depth-tested: the horizon and props hide it when it is low,
+ * and it never shows through the ground. The night side keeps a faint glow and the limb a thin
+ * atmosphere ring so the whole disc stays readable at any phase.
  */
 
 /** Apparent angular diameter of the Earth from the Moon, degrees (≈ 12 742 km / 384 400 km). */
 export const EARTH_ANGULAR_DIAMETER_DEG = 1.9;
+/**
+ * The Earth is drawn this many times larger than its true apparent size so its phase and its
+ * position against the skyline read on a small screen (heights above the horizon are already
+ * exaggerated ×3, see missionSky.ts). The UI should say so wherever it mentions the Earth's size.
+ */
+export const EARTH_DRAWN_SIZE_FACTOR = 2;
+/** Angular diameter (deg) of the Earth as drawn. */
+export const EARTH_DRAWN_DIAMETER_DEG = EARTH_ANGULAR_DIAMETER_DEG * EARTH_DRAWN_SIZE_FACTOR;
 
 // --- tiny deterministic 3D value noise (seamless on the sphere) ---
 function hash3(x: number, y: number, z: number, seed: number): number {
@@ -140,7 +150,8 @@ const earthFragment = /* glsl */ `
     vec3 albedo = texture2D( uMap, vUv ).rgb;
     float ndl = dot( n, uSunDir );
     float lit = smoothstep( -0.08, 0.25, ndl ) * max( ndl, 0.0 ) * 0.65 + smoothstep( -0.05, 0.15, ndl ) * 0.35;
-    vec3 col = albedo * lit * uSunIrradiance;
+    // Day side: surface plus the blue haze of the atmosphere over it (keeps the oceans from going black).
+    vec3 col = ( albedo + vec3( 0.035, 0.07, 0.15 ) ) * lit * uSunIrradiance;
     // Ocean glint (oceans are the bluest, darkest texels).
     float ocean = smoothstep( 0.05, 0.0, albedo.g - albedo.b * 0.55 );
     vec3 h = normalize( uSunDir + v );
@@ -148,6 +159,12 @@ const earthFragment = /* glsl */ `
     // Thin atmosphere: blue rim on the day side.
     float rim = pow( 1.0 - max( dot( n, v ), 0.0 ), 3.0 );
     col += vec3( 0.25, 0.45, 1.0 ) * rim * smoothstep( -0.15, 0.35, ndl ) * 0.45 * uSunIrradiance;
+    // Night side: a faint blue glow, and a thin atmosphere ring around the whole limb (brighter
+    // toward the Sun), so even a thin crescent reads as a round planet against the black sky.
+    float nightSide = 1.0 - smoothstep( -0.25, 0.1, ndl );
+    col += ( albedo * 0.05 + vec3( 0.010, 0.015, 0.027 ) ) * nightSide;
+    float ring = pow( 1.0 - max( dot( n, v ), 0.0 ), 6.0 );
+    col += vec3( 0.16, 0.3, 0.7 ) * ring * ( 0.12 + 0.5 * smoothstep( -0.6, 0.2, ndl ) );
     gl_FragColor = vec4( col, 1.0 );
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
@@ -164,13 +181,13 @@ export interface EarthBody {
 
 export function createEarth(lowPower: boolean): EarthBody {
   const texture = lowPower ? buildEarthTexture(128, 64) : buildEarthTexture(256, 128);
-  // Unit sphere, scaled every frame so it subtends EARTH_ANGULAR_DIAMETER_DEG at its distance.
+  // Unit sphere, scaled every frame so it subtends EARTH_DRAWN_DIAMETER_DEG at its distance.
   const geometry = new THREE.SphereGeometry(1, lowPower ? 24 : 40, lowPower ? 16 : 28);
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uMap: { value: texture },
       uSunDir: { value: new THREE.Vector3(0, 0.17, -1).normalize() },
-      uSunIrradiance: { value: 1.0 },
+      uSunIrradiance: { value: 1.6 },
     },
     vertexShader: earthVertex,
     fragmentShader: earthFragment,
@@ -183,8 +200,10 @@ export function createEarth(lowPower: boolean): EarthBody {
   mesh.receiveShadow = false;
   // Fixed, arbitrary tilt so the poles are not exactly vertical.
   mesh.rotation.set(0.41, 1.3, 0.12);
-  const dir = new THREE.Vector3(0.5, 0.05, -1).normalize();
-  const halfAngle = ((EARTH_ANGULAR_DIAMETER_DEG / 2) * Math.PI) / 180;
+  const dir = new THREE.Vector3(0.5, -0.3, -1).normalize();
+  const halfAngle = ((EARTH_DRAWN_DIAMETER_DEG / 2) * Math.PI) / 180;
+  // Not drawn once the whole disc is this far under the horizontal (it is behind the ground anyway).
+  const hideBelow = -Math.sin(halfAngle + (2 * Math.PI) / 180);
   const camPos = new THREE.Vector3();
 
   return {
@@ -200,7 +219,7 @@ export function createEarth(lowPower: boolean): EarthBody {
       mesh.position.copy(camera.getWorldPosition(camPos)).addScaledVector(dir, dist);
       mesh.scale.setScalar(dist * Math.sin(halfAngle));
       // Hidden well below the horizon: skip the draw entirely.
-      mesh.visible = dir.y > -0.05;
+      mesh.visible = dir.y > hideBelow;
     },
     dispose() {
       geometry.dispose();

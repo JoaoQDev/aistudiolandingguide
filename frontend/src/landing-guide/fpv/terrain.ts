@@ -1,13 +1,18 @@
 import * as THREE from 'three';
+import { EasedSun } from './skyEase';
+import { lowSunFactor, nightFactor, NIGHT_REGOLITH_AMBIENT, REGOLITH_PHOT_K, sunGate } from './skyNight';
 import { createHeightField } from './terrainHeight';
 import { applyRegolithShader, type RegolithScale, type RegolithUniforms } from './terrainShader';
+import { GROUND_OBJECT_NAME, registerGroundHeight, unregisterGroundHeight } from './terrainSkyline';
 import { generateRegolithTexture } from './terrainTexture';
-import type { GroundModule, GroundOptions } from './types';
+import type { FrameContext, GroundModule, GroundOptions } from './types';
 
 /**
  * Lunar ground for the first-person walk: nested LOD rings reaching ~6 km (dense around the
  * walk area), gentle undulation, sparse soft craters, far rolling hills, and a procedural
  * regolith material with multi-scale detail and a sunward forward-scatter sheen.
+ * The Sun direction and illumination follow the mission state, eased exactly like the sky's
+ * (skyEase.ts), so the shader, the light and the Sun disc always agree.
  * Purely illustrative scenery.
  */
 
@@ -20,6 +25,35 @@ const SCALES: RegolithScale[] = [
 ];
 
 const REGOLITH_SRGB: [number, number, number] = [158, 153, 158];
+
+/**
+ * Received (prop) shadows on the regolith: strength near the camera, and the distances (m) over
+ * which it drops to the given factor. `TUNED` is the daylight look (no long wedges across the
+ * plain); `LOW_SUN` lets a Sun near the horizon throw long shadows.
+ */
+export const GROUND_SHADOW_TUNED = { strength: 0.32, fadeStart: 4, fadeEnd: 14, farFactor: 0.12 };
+export const GROUND_SHADOW_LOW_SUN = { strength: 0.9, fadeStart: 45, fadeEnd: 240, farFactor: 0.45 };
+
+export interface GroundShadowLook {
+  strength: number;
+  fadeStart: number;
+  fadeEnd: number;
+  farFactor: number;
+}
+
+/** Received-shadow look for a Sun at `sinEl` (sine of its drawn elevation). */
+export function groundShadowLook(sinEl: number, out: GroundShadowLook = { ...GROUND_SHADOW_TUNED }): GroundShadowLook {
+  const t = lowSunFactor(sinEl);
+  const a = GROUND_SHADOW_TUNED;
+  const b = GROUND_SHADOW_LOW_SUN;
+  // Exact at both ends (t = 0 keeps the tuned numbers bit for bit).
+  const mix = (x: number, y: number) => x * (1 - t) + y * t;
+  out.strength = mix(a.strength, b.strength);
+  out.fadeStart = mix(a.fadeStart, b.fadeStart);
+  out.fadeEnd = mix(a.fadeEnd, b.fadeEnd);
+  out.farFactor = mix(a.farFactor, b.farFactor);
+  return out;
+}
 
 export function createLunarGround(opts: GroundOptions): GroundModule {
   const field = createHeightField(opts);
@@ -51,7 +85,7 @@ export function createLunarGround(opts: GroundOptions): GroundModule {
     uDetail: { value: detail },
     uSunDirW: { value: new THREE.Vector3(0, Math.sin(0.1745), -Math.cos(0.1745)) },
     uDiffuseGain: { value: 0.97 },
-    uPhotK: { value: 0.35 },
+    uPhotK: { value: REGOLITH_PHOT_K },
     uSheenLobe: { value: 0.45 },
     uSheenFar: { value: new THREE.Vector2(0.5, 4) },
     uSheenTail: { value: new THREE.Vector2(1.0, 1.35) },
@@ -70,25 +104,59 @@ export function createLunarGround(opts: GroundOptions): GroundModule {
     // Near-field fill on the valley walls' self-shadowed faces (gameplay only): gone by ~150 m,
     // so the ridge band of the valley views (≥ 160 m away) stays black.
     uWallFill: { value: new THREE.Vector3(0.095, 60, 150) },
+    uSunOn: { value: 1 },
+    uNightAmbient: { value: new THREE.Color(0, 0, 0) },
   };
   const scales = opts.lowPower ? SCALES.slice(1) : SCALES;
-  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v5' : 'lunar-regolith-v5');
+  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v6' : 'lunar-regolith-v6');
 
   const ground = new THREE.Mesh(geo, mat);
-  ground.name = 'lunar-ground';
+  ground.name = GROUND_OBJECT_NAME;
   ground.receiveShadow = true;
   ground.castShadow = false;
   ground.frustumCulled = false;
   ground.matrixAutoUpdate = false;
   ground.updateMatrix();
 
+  // Lets the sky find the terrain skyline (how much of the Sun's disc the ground hides).
+  registerGroundHeight(ground, field.heightAt);
+
+  // Eased mission state: same calls and same frame dt as the sky's copy.
+  const sunState = new EasedSun(uniforms.uSunDirW.value);
+  const shadowLook = groundShadowLook(uniforms.uSunDirW.value.y);
+  const applyLighting = () => {
+    const dir = sunState.direction;
+    const f = sunState.illumination;
+    uniforms.uSunDirW.value.copy(dir);
+    uniforms.uSunOn.value = sunGate(f);
+    const night = nightFactor(f);
+    uniforms.uNightAmbient.value.setRGB(
+      NIGHT_REGOLITH_AMBIENT[0] * night,
+      NIGHT_REGOLITH_AMBIENT[1] * night,
+      NIGHT_REGOLITH_AMBIENT[2] * night,
+    );
+    groundShadowLook(dir.y, shadowLook);
+    uniforms.uShadowStrength.value = shadowLook.strength;
+    uniforms.uShadowFade.value.set(shadowLook.fadeStart, shadowLook.fadeEnd, shadowLook.farFactor);
+  };
+  applyLighting();
+
   return {
     object: ground,
     heightAt: field.heightAt,
     setSunDirection(dir: THREE.Vector3) {
-      uniforms.uSunDirW.value.copy(dir).normalize();
+      sunState.setDirection(dir);
+      applyLighting();
+    },
+    setSunIllumination(fraction: number) {
+      sunState.setIllumination(fraction);
+      applyLighting();
+    },
+    update(frame: FrameContext) {
+      if (sunState.step(frame.dt)) applyLighting();
     },
     dispose() {
+      unregisterGroundHeight(ground);
       geo.dispose();
       mat.dispose();
       detail.dispose();
