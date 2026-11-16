@@ -5,6 +5,7 @@ import { createGreenhouse } from './propsDome';
 import { groundFrame, makeRng, yawForAzimuth } from './propsGeometry';
 import {
   GREENHOUSE_CENTER,
+  GREENHOUSE_KEEP_OUT,
   GREENHOUSE_RADIUS,
   MOONBASE_SPAWN,
   polar,
@@ -277,7 +278,8 @@ export function createMoonbase(opts: PropsOptions): PropsModule {
   greenhouse.object.position.set(GREENHOUSE_CENTER.x, domeGround, GREENHOUSE_CENTER.z);
   group.add(greenhouse.object);
   disposables.push(greenhouse);
-  colliders.push({ x: GREENHOUSE_CENTER.x, z: GREENHOUSE_CENTER.z, radius: R + 2 });
+  // soft walk limit: one large collider keeps the walker ≈ 280 m out (see GREENHOUSE_KEEP_OUT)
+  colliders.push({ x: GREENHOUSE_CENTER.x, z: GREENHOUSE_CENTER.z, radius: Math.max(R + 2, GREENHOUSE_KEEP_OUT) });
   contacts.push({ x: GREENHOUSE_CENTER.x, z: GREENHOUSE_CENTER.z, yawDeg: 0, halfX: R + 1.5, halfZ: R + 1.5, corner: R + 1.5, strength: 0.55, spread: 4 });
   {
     // backlit dome shadow falling toward the base (dark patch in front of the dome, t12)

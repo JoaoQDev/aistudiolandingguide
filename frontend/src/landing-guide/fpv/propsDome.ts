@@ -74,6 +74,7 @@ void main() {
 const CANOPY_FRAG = /* glsl */ `
 uniform vec3 uSun;
 uniform vec3 uLeaf;
+uniform vec3 uSpeck;
 varying vec3 vN;
 varying vec3 vCol;
 varying float vLit;
@@ -104,7 +105,12 @@ void main() {
   float wrap = 0.45 + 0.55 * clamp(d * 0.5 + 0.5, 0.0, 1.0);
   // clusters catch the light mostly on the sunward half and on top
   float sunSide = 0.15 + 1.0 * smoothstep(-0.3, 0.7, d) + 0.25 * clamp(N.y, 0.0, 1.0);
-  vec3 col = vCol * wrap * (0.75 + 0.5 * spots) + uLeaf * leaves * sunSide * (0.6 + 0.5 * vLit);
+  // sparse bright leaf highlights (≈ 0.4 m, 1–2 px at the dome's range), mostly toward the top,
+  // as the crisp light flecks scattered over the reference canopy
+  // grouped in the leaf clusters, with darker gaps between them
+  float speck = smoothstep(0.64, 0.84, vn(vL * 2.3 + 5.1)) * smoothstep(0.46, 0.64, clump) * vLit;
+  float speckLight = 0.35 + 0.4 * clamp(N.y, 0.0, 1.0) + 0.35 * smoothstep(-0.3, 0.7, d);
+  vec3 col = vCol * wrap * (0.6 + 0.5 * spots + 0.5 * smoothstep(0.45, 0.7, clump)) + uLeaf * leaves * sunSide * (0.6 + 0.5 * vLit) + uSpeck * speck * speckLight;
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -199,9 +205,11 @@ export function createGreenhouse(radius: number, baseY: number, lowPower: boolea
   const pos = canopyGeo.getAttribute('position') as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
   const lit = new Float32Array(pos.count);
-  const dark = new THREE.Color(0x0a0f06);
-  const mid = new THREE.Color(0x1a2211);
-  const brown = new THREE.Color(0x231a0d);
+  // Linear tones. The tone mapper's toe crushes the darkest channel, so these are only faintly
+  // warm-olive: on screen they read as the reference's dark olive-brown (≈ sRGB 15–30).
+  const dark = new THREE.Color().setRGB(0.029, 0.028, 0.025);
+  const mid = new THREE.Color().setRGB(0.049, 0.047, 0.041);
+  const brown = new THREE.Color().setRGB(0.055, 0.044, 0.034);
   const c = new THREE.Color();
   const p = new THREE.Vector3();
   const sunX = Math.sin((sunAzDeg * Math.PI) / 180);
@@ -235,8 +243,10 @@ export function createGreenhouse(radius: number, baseY: number, lowPower: boolea
     vertexColors: true,
     uniforms: {
       uSun: { value: new THREE.Vector3(0, 0.2, -1).normalize() },
-      // dark olive-green leaf highlight (reference: canopy ≈ sRGB 10–20, lit clusters ≈ 35–55)
-      uLeaf: { value: new THREE.Color(0x4a5e2a) },
+      // olive leaf clusters and sparse pale-yellow flecks (reference canopy: mean ≈ sRGB 22–25 with
+      // a ≈ 20–30 spread from bright flecks over a dark olive-brown base)
+      uLeaf: { value: new THREE.Color().setRGB(0.12, 0.13, 0.065) },
+      uSpeck: { value: new THREE.Color().setRGB(0.85, 0.8, 0.58) },
     },
   });
   const canopy = new THREE.Mesh(canopyGeo, canopyMat);

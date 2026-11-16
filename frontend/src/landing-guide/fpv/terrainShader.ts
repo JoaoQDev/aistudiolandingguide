@@ -18,7 +18,10 @@ import * as THREE from 'three';
  * - received shadows (prop shadows; the ground casts none) kept only close to the camera, so
  *   backlit props do not throw long dark wedges across the plain (contact darkening is drawn by
  *   the props' own decals);
- * - a faint lavender tint in shade.
+ * - a faint lavender tint in shade;
+ * - near the camera only, a soft bounce fill on large self-shadowed steep faces (the valley
+ *   walls), so standing at their foot they show relief instead of a black void, while the same
+ *   faces seen from afar keep the reference's black ridge band.
  * The look is illustrative; it is not a calibrated photometric model.
  */
 
@@ -81,6 +84,11 @@ export interface RegolithUniforms {
   /** Received-shadow strength near the camera, and the factor left at/after uShadowFade.y metres. */
   uShadowStrength: { value: number };
   uShadowFade: { value: THREE.Vector3 };
+  /**
+   * Bounce fill on self-shadowed steep faces: strength (fraction of the Sun's irradiance) and the
+   * distances (m) over which it fades out, so far faces (the ridge band) stay black.
+   */
+  uWallFill: { value: THREE.Vector3 };
 }
 
 const f = (v: number) => (Number.isInteger(v) ? `${v}.0` : `${v}`);
@@ -176,13 +184,17 @@ uniform vec3 uCavityFade;
 uniform vec2 uIsoK;
 uniform float uShadowStrength;
 uniform vec3 uShadowFade;
+uniform vec3 uWallFill;
 varying vec3 vLunarWorld;
 varying vec3 vLunarNormalW;
 float lunarOcc = 1.0;
 float lunarShadowK = 1.0;
 float lunarMacroLit = 1.0;
 float lunarHide = 0.0;
+float lunarMacroW = 0.06;
+float lunarWallFill = 0.0;
 vec3 lunarGeoNormalV = vec3( 0.0, 1.0, 0.0 );
+vec3 lunarBounceV = vec3( 0.0, 1.0, 0.0 );
 `;
 
     const direct = /* glsl */ `
@@ -193,7 +205,8 @@ void RE_Direct_Lunar( const in IncidentLight directLight, const in vec3 geometry
   float lit = smoothstep( -0.05, 0.1, mu0 );
   // Large-scale self-shadowing (geometry facing away from the Sun) stays black, as in the
   // reference; only the micro-relief from the detail maps gets the lifted shade.
-  float macroLit = smoothstep( -0.06, 0.06, dot( lunarGeoNormalV, directLight.direction ) );
+  // (the terminator is widened to the pixel footprint, so lit crests seen edge-on do not alias)
+  float macroLit = smoothstep( -lunarMacroW, lunarMacroW, dot( lunarGeoNormalV, directLight.direction ) );
   lit *= macroLit;
   // Micro-shadows hidden at low phase angle: the micro-relief's shading fades toward that of
   // the macro surface (macro self-shadowing is kept).
@@ -231,8 +244,14 @@ void RE_Direct_Lunar( const in IncidentLight directLight, const in vec3 geometry
   // Cast micro-shadow proxy: pit floors and Sun-side walls take the cavity shadow, walls turned
   // toward the Sun (the far rim of a pit) stay lit.
   float occ = mix( lunarOcc, 1.0, smoothstep( 0.3, 0.65, mu0 ) );
+  // Bounce from the sunlit ground on a self-shadowed steep face near the camera: soft light from
+  // above / away from the Sun, shaded by the micro-relief and the pits, so the face shows relief.
+  // Neutral grey: the tone mapper's toe would turn the regolith's faint lavender into magenta here.
+  float bounce = clamp( dot( geometryNormal, lunarBounceV ) * 0.9 + 0.15, 0.0, 1.0 );
+  float wallFill = isSun * lunarWallFill * ( 1.0 - macroLit ) * bounce * bounce * lunarOcc;
   reflectedLight.directDiffuse += directLight.color * material.diffuseColor *
-    ( RECIPROCAL_PI * uDiffuseGain * F * lit * occ + RECIPROCAL_PI * fill * occ * occ + RECIPROCAL_PI * sheen * mix( 1.0, occ, 0.5 ) );
+    ( RECIPROCAL_PI * uDiffuseGain * F * lit * occ + RECIPROCAL_PI * fill * occ * occ + RECIPROCAL_PI * sheen * mix( 1.0, occ, 0.5 ) )
+    + directLight.color * vec3( dot( material.diffuseColor, vec3( 0.2126, 0.7152, 0.0722 ) ) ) * ( RECIPROCAL_PI * wallFill );
 }
 `;
 
@@ -263,8 +282,16 @@ void RE_Direct_Lunar( const in IncidentLight directLight, const in vec3 geometry
         [
           '#include <normal_fragment_maps>',
           '{',
-          '  lunarGeoNormalV = normalize( ( viewMatrix * vec4( normalize( vLunarNormalW ), 0.0 ) ).xyz );',
-          '  lunarMacroLit = smoothstep( -0.06, 0.06, dot( normalize( vLunarNormalW ), normalize( uSunDirW ) ) );',
+          '  vec3 nGeoW = normalize( vLunarNormalW );',
+          '  lunarGeoNormalV = normalize( ( viewMatrix * vec4( nGeoW, 0.0 ) ).xyz );',
+          '  float nlGeo = dot( nGeoW, normalize( uSunDirW ) );',
+          '  lunarMacroW = 0.06 + min( 1.5 * fwidth( nlGeo ), 0.2 );',
+          '  lunarMacroLit = smoothstep( -lunarMacroW, lunarMacroW, nlGeo );',
+          // Near-field bounce fill on steep faces (≳ 10°), faded out with distance.
+          '  lunarWallFill = uWallFill.x * smoothstep( 0.12, 0.26, length( nGeoW.xz ) ) * ( 1.0 - smoothstep( uWallFill.y, uWallFill.z, lunarDist ) );',
+          '  vec3 sunHW = normalize( vec3( uSunDirW.x, 0.0, uSunDirW.z ) + vec3( 1e-5, 0.0, 0.0 ) );',
+          '  vec3 sideHW = vec3( -sunHW.z, 0.0, sunHW.x );',
+          '  lunarBounceV = normalize( ( viewMatrix * vec4( normalize( -0.45 * sunHW + 0.45 * sideHW + vec3( 0.0, 0.75, 0.0 ) ), 0.0 ) ).xyz );',
           '  vec3 nW = normalize( normalize( vLunarNormalW ) - vec3( lunarSlope.x, 0.0, lunarSlope.y ) );',
           '  normal = normalize( ( viewMatrix * vec4( nW, 0.0 ) ).xyz );',
           '}',

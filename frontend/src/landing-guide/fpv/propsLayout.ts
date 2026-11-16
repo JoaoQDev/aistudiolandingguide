@@ -112,15 +112,19 @@ export const T41_ROW = {
   left: polar(T41_VIEW.yawDeg + 11, 12.5, T41_VIEW.x, T41_VIEW.z),
   right: polar(T41_VIEW.yawDeg + 33, 18, T41_VIEW.x, T41_VIEW.z),
 };
-/** Four tanks in a loose overlapping line just beyond the row's far end (x ≈ 1475–1775 px). */
+/**
+ * Four tanks in a tight overlapping line just beyond the row's far end (≈ 220 px wide in t41.5,
+ * as in the reference): 0.6 m apart across the view, alternately 0.55 m nearer / farther (local
+ * +Z faces the viewpoint) so neighbours overlap on screen without intersecting (0.77 m bodies).
+ */
 export const T41_TANKS = {
   ...polar(T41_VIEW.yawDeg + 39, 16.5, T41_VIEW.x, T41_VIEW.z),
   yawDeg: 168,
   items: [
-    [-1.25, 0.2],
-    [-0.4, 0],
-    [0.45, 0.3],
-    [1.3, 0],
+    [-0.9, 0.35],
+    [-0.3, -0.2],
+    [0.3, 0.35],
+    [0.9, -0.2],
   ] as [number, number][],
 };
 
@@ -131,6 +135,13 @@ export const T41_TANKS = {
  */
 export const GREENHOUSE_CENTER = polar(238.6, 380);
 export const GREENHOUSE_RADIUS = 38;
+/**
+ * Walk keep-out radius (m) around the greenhouse, as one large circle collider: the dome is
+ * scenery for the distance (up close it would turn into a blurry blob), so the walker slides
+ * along this circle instead of reaching it. The t37/t39/t47 valley cameras (≈ 290–295 m from
+ * the dome) stay reachable just outside it.
+ */
+export const GREENHOUSE_KEEP_OUT = 280;
 
 /**
  * Poses reproducing the reference frames (round-3 pose table; `?fpvPose=x,z,yaw,pitch`). Sunward

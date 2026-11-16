@@ -190,8 +190,12 @@ export interface Knoll {
 export const KNOLLS: readonly Knoll[] = [
   // Rising ground on the left of the valley views toward the Sun (t37/t39/t47), facing ≈ North.
   { x: -96, z: 104, a: 92, b: 62, axisAz: 100, h: 4.8 },
-  // Rise E of the second container row: the right skyline of t41.5/t43 climbs over it.
-  { x: 125, z: -75, a: 66, b: 70, axisAz: 90, h: 7 },
+  // Rise E of the second container row: the right skyline of t41.5/t43 climbs over it. Polish
+  // pass: centred farther SE and turned so its NW shoulder (the t41.5/t43 skyline left of the
+  // tanks) sits ≈ 1–1.5° lower, while the ground under the viewpoint and group E's props keeps
+  // its height within ≈ 0.2 m (simply moving the centre east lowered the camera and the props
+  // with it and raised that skyline instead).
+  { x: 130.5, z: -62, a: 71, b: 80, axisAz: 52, h: 7 },
   // Broad rise N/NE of the second row (skyline ahead of the t41.5/t43 views).
   { x: 106.5, z: -138.7, a: 73, b: 45.5, axisAz: 100, h: 5.2 },
 ];

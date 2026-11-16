@@ -67,9 +67,12 @@ export function createLunarGround(opts: GroundOptions): GroundModule {
     uIsoK: { value: new THREE.Vector2(0.45, 0.85) },
     uShadowStrength: { value: 0.32 },
     uShadowFade: { value: new THREE.Vector3(4, 14, 0.12) },
+    // Near-field fill on the valley walls' self-shadowed faces (gameplay only): gone by ~150 m,
+    // so the ridge band of the valley views (≥ 160 m away) stays black.
+    uWallFill: { value: new THREE.Vector3(0.095, 60, 150) },
   };
   const scales = opts.lowPower ? SCALES.slice(1) : SCALES;
-  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v4' : 'lunar-regolith-v4');
+  applyRegolithShader(mat, uniforms, { scales }, opts.lowPower ? 'lunar-regolith-low-v5' : 'lunar-regolith-v5');
 
   const ground = new THREE.Mesh(geo, mat);
   ground.name = 'lunar-ground';

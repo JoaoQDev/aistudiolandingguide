@@ -64,6 +64,11 @@ export interface LipParams {
   r: number;
   w: number;
   h: number;
+  /**
+   * Optional azimuth window (deg) applied to the crest height only (the valley's descent still
+   * follows the full lip window), to taper one end of the crest without moving the valley edge.
+   */
+  trim?: { az: number; hw: number; fade: number };
 }
 
 export const VALLEY: ValleyParams = {
@@ -87,7 +92,9 @@ export const WALLS: readonly WallParams[] = [
 ];
 
 export const LIPS: readonly LipParams[] = [
-  { az: 278, hw: 26, fade: 9, r: 72, w: 20, h: 1.3 },
+  // Its crest tapers out by azimuth ≈ 300° (polish pass): north of the walls (≤ 289°) it only
+  // read as a raised shelf behind the t01 crate row and a notch on the t05 skyline.
+  { az: 278, hw: 26, fade: 9, r: 72, w: 20, h: 1.3, trim: { az: 268, hw: 18, fade: 14 } },
   { az: 202, hw: 24, fade: 12, r: 76, w: 20, h: 2.2 },
 ];
 
@@ -135,7 +142,8 @@ export function landformAt(
     if (w <= 0) continue;
     wl = Math.max(wl, w);
     const t = (r - L.r) / L.w;
-    if (t > -2.5 && t < 2.5) h += w * L.h * Math.exp(-t * t);
+    const wh = L.trim ? w * azWindow(azDeg, L.trim.az, L.trim.hw, L.trim.fade) : w;
+    if (t > -2.5 && t < 2.5) h += wh * L.h * Math.exp(-t * t);
   }
   if (wv > 0) {
     const ra = V.r0 + (V.r0Lip - V.r0) * wl;

@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import { resolveCollisions, type WalkerState } from './controls';
 import { createMoonbase } from './props';
 import {
   bearing,
   GREENHOUSE_CENTER,
+  GREENHOUSE_KEEP_OUT,
   GREENHOUSE_RADIUS,
   LAYOUT_SUN_AZIMUTH_DEG,
   MOONBASE_SPAWN,
@@ -101,6 +103,26 @@ describe('createMoonbase', () => {
       }
       base.dispose();
     }
+  });
+
+  it('keeps the walker ≈ 280 m away from the far greenhouse (soft keep-out collider)', () => {
+    expect(GREENHOUSE_KEEP_OUT).toBeGreaterThanOrEqual(270);
+    const base = createMoonbase({ seed: 4, lowPower: true, heightAt: () => 0 });
+    const dome = base.colliders.find((c) => c.x === GREENHOUSE_CENTER.x && c.z === GREENHOUSE_CENTER.z);
+    expect(dome?.radius).toBe(GREENHOUSE_KEEP_OUT);
+    // walk straight at the dome from the t47 camera (≈ 295 m out): the collider stops and slides us
+    const start = REFERENCE_POSES.t47;
+    const walker: WalkerState = { x: start.x, z: start.z, vx: 0, vz: 0 };
+    for (let i = 0; i < 400; i++) {
+      const d = Math.hypot(GREENHOUSE_CENTER.x - walker.x, GREENHOUSE_CENTER.z - walker.z);
+      walker.vx = ((GREENHOUSE_CENTER.x - walker.x) / d) * 5;
+      walker.vz = ((GREENHOUSE_CENTER.z - walker.z) / d) * 5;
+      walker.x += walker.vx * 0.05;
+      walker.z += walker.vz * 0.05;
+      resolveCollisions(walker, base.colliders);
+    }
+    expect(Math.hypot(GREENHOUSE_CENTER.x - walker.x, GREENHOUSE_CENTER.z - walker.z)).toBeGreaterThan(GREENHOUSE_KEEP_OUT);
+    base.dispose();
   });
 
   it('keeps the measured scale relations and the far greenhouse bearing', () => {
